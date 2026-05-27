@@ -270,6 +270,16 @@ The callable passed as `reward_fn` receives a `dict` with the following keys:
 | `is_left_of_center` | bool | Car is left of centre line |
 | `waypoints` | list | All track waypoints |
 | `closest_waypoints` | list[int] | Indices of previous and next waypoints |
+| `steps` | int | Step count within the current episode |
+| `is_offtrack` | bool | All four wheels off the track this step |
+| `is_crashed` | bool | Bounding-box collision with an obstacle this step |
+| `objects_location` | list[(x, y)] | World positions of all spawned obstacles (empty when OA off) |
+| `closest_objects` | list[int] | `[prev_idx, next_idx]` in the obstacle list; `-1` means none |
+| `objects_distance` | list[float] | Each obstacle's projection distance along the centerline |
+| `object_in_camera` | bool | Any obstacle inside the camera frustum |
+
+The object-related keys are always present (defaults are empty list / `False` /
+`[-1, -1]`) so reward functions never need `params.get(...)`.
 
 ### Customising sensors
 
@@ -299,6 +309,61 @@ env = DeepRacerEnv(
     },
 )
 ```
+
+### Object Avoidance
+
+Spawn N static obstacles (cardboard-box-shaped) on the track every episode and
+expose their state to the reward function. The measurement side (bbox
+collision detection, frustum check, `objects_*` reward params) is always
+active in the env; the `object_avoidance` kwarg enables the spawn side.
+
+```python
+from deepracer_env import DeepRacerEnv
+from deepracer_env.object_avoidance import ObjectAvoidanceConfig
+
+def my_reward(p):
+    if p["is_crashed"]:
+        return -10.0
+    if not p["all_wheels_on_track"]:
+        return 1e-3
+    return float(p["progress"] * p["speed"] / 4.0)
+
+env = DeepRacerEnv(
+    reward_fn=my_reward,
+    object_avoidance=ObjectAvoidanceConfig(
+        n_obstacles=3,
+        placement="random_on_waypoints",   # or "fixed" / "callable"
+        min_spacing_m=2.5,
+        lane="any",                        # any / inner / outer / center
+        terminate_on_collision=True,       # AWS DeepRacer OA default
+    ),
+)
+
+obs, info = env.reset(seed=42)
+# info["objects_location"] -> [[x, y], [x, y], [x, y]]
+```
+
+`ObjectAvoidanceConfig` fields:
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `enabled` | `True` | Set `False` to skip the spawn side entirely |
+| `n_obstacles` | `2` | Number of boxes per episode |
+| `placement` | `"random_on_waypoints"` | Strategy — see below |
+| `fixed_positions` | `None` | List of `(x, y)` when `placement="fixed"` |
+| `placement_fn` | `None` | Callable `(np_random, track_data) -> list[(x, y[, yaw])]` for `placement="callable"` |
+| `min_spacing_m` | `2.0` | Enforced via rejection sampling along the centerline |
+| `lane` | `"any"` | Which lane to project obstacles onto |
+| `terminate_on_collision` | `True` | `False` keeps `is_crashed` live across the trajectory (used for constrained-RL cost signals) |
+| `obstacle_sdf_path` | bundled `obstacle_box.sdf` | Custom Gazebo SDF |
+| `name_prefix` | `"obstacle"` | Must contain `"obstacle"` so the mercy-reset path still recognises it |
+
+Layouts are deterministic per `env.reset(seed=...)` call — same seed → same
+layout, different seed → different layout. On `env.close()` every spawned
+obstacle is removed from Gazebo and from `TrackData`.
+
+See `examples/train_object_avoidance.py` for a Stable-Baselines3 PPO trainer
+that uses this feature end to end.
 
 ### Full control — bring your own Agent
 

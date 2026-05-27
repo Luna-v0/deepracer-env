@@ -508,9 +508,18 @@ class TrackData(object):
 
     def get_objects_in_camera_frustums(self, agent_name, car_pose, object_order=None):
         """Returns list of tuple (idx, object.pose) for the objects
-        that are in camera frustums"""
+        that are in camera frustums.
 
-        frustum = FrustumManager.get_instance().get(agent_name=agent_name)
+        If no frustum has been registered for ``agent_name`` (the
+        ``deepracer_env`` build path never calls ``FrustumManager.add``;
+        the field is populated by the upstream training app), fall back to
+        returning an empty list so the per-step reward param
+        ``object_in_camera`` stays ``False`` instead of crashing.
+        """
+        try:
+            frustum = FrustumManager.get_instance().get(agent_name=agent_name)
+        except KeyError:
+            return []
         frustum.update(car_pose)
         objects_in_frustum = []
 

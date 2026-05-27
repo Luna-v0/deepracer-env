@@ -136,6 +136,7 @@ def _build_agent(
     sensors: List[str],
     config: Optional[Dict[str, Any]],
     is_training: bool,
+    extra_ctrl_config: Optional[Dict[str, Any]] = None,
 ):
     '''Build a default :class:`~deepracer_env.agents.agent.Agent` from its component parts.
 
@@ -163,9 +164,12 @@ def _build_agent(
             SensorFactory.create_sensor(racecar_name, sensor_type, {})
         )
 
-    # Merge user overrides into the default config
+    # Merge user overrides into the default config. Order matters:
+    #   defaults < env-level (object_avoidance, etc.) < user `config` overrides
     ctrl_config = {**_DEFAULT_CTRL_CONFIG}
     ctrl_config[ctrl_const.ConfigParams.REWARD.value] = reward_fn
+    if extra_ctrl_config:
+        ctrl_config.update(extra_ctrl_config)
     if config:
         ctrl_config.update(config)
 
@@ -207,8 +211,20 @@ class DeepRacerEnv(gymnasium.Env):
         agent=None,
         action_space: Optional[gymnasium.spaces.Space] = None,
         is_training: bool = True,
+        object_avoidance: Optional[Any] = None,
     ) -> None:
         super().__init__()
+
+        # Surface OA config knobs into the controller config dict before
+        # building the agent so RolloutCtrl and CrashResetRule see them at
+        # construction time.
+        self._oa_cfg = object_avoidance
+        extra_ctrl_config: Dict[str, Any] = {}
+        if self._oa_cfg is not None:
+            extra_ctrl_config[ctrl_const.ConfigParams.OBJECT_AVOIDANCE_ENABLED.value] = \
+                bool(self._oa_cfg.enabled)
+            extra_ctrl_config[ctrl_const.ConfigParams.TERMINATE_ON_COLLISION.value] = \
+                bool(self._oa_cfg.terminate_on_collision)
 
         if agent is not None:
             self._agent = agent
@@ -223,7 +239,17 @@ class DeepRacerEnv(gymnasium.Env):
                 sensors=sensors if sensors is not None else DEFAULT_SENSORS,
                 config=config,
                 is_training=is_training,
+                extra_ctrl_config=extra_ctrl_config,
             )
+
+        # Construct the ObstacleManager *after* the agent so the TrackData
+        # singleton is already initialised by the controller.
+        self._obstacle_manager = None
+        if self._oa_cfg is not None and self._oa_cfg.enabled:
+            from deepracer_env.object_avoidance import ObstacleManager
+            from deepracer_env.track_geom.track_data import TrackData
+            self._obstacle_manager = ObstacleManager(
+                self._oa_cfg, TrackData.get_instance())
 
         self.action_space: gymnasium.spaces.Space = (
             action_space if action_space is not None else DEFAULT_ACTION_SPACE
@@ -256,9 +282,19 @@ class DeepRacerEnv(gymnasium.Env):
         '''
         super().reset(seed=seed)
         LOG.debug('DeepRacerEnv.reset() called')
+        # Respawn obstacles *before* the agent reset so the controller's
+        # start-pose computation (which scans TrackData.object_poses) sees
+        # the new layout.
+        placed = []
+        if self._obstacle_manager is not None:
+            placed = self._obstacle_manager.respawn(self.np_random)
         obs = self._agent.reset_agent()
-        self._last_step_info = {}
-        return obs, {}
+        info: Dict[str, Any] = {
+            'objects_location': [list(xy) for _, xy in placed],
+            'is_crashed': False,
+        }
+        self._last_step_info = info
+        return obs, info
 
     def step(
         self, action: np.ndarray
@@ -286,8 +322,18 @@ class DeepRacerEnv(gymnasium.Env):
         agents_info_map = self._agent.update_agent(action)
         # 3. Evaluate the action (compute reward, termination)
         obs, reward, done = self._agent.judge_action(action, agents_info_map)
-        self._last_step_info = agents_info_map
-        return obs, float(reward), bool(done), False, agents_info_map
+        # Surface the always-populated object / crash flags into info so
+        # wrappers (D2, D3) don't have to dig into the controller.
+        info: Dict[str, Any] = dict(agents_info_map) if isinstance(agents_info_map, dict) else {}
+        ctrl = getattr(self._agent, 'ctrl', None)
+        reward_params = getattr(ctrl, 'reward_params', None) if ctrl is not None else None
+        if reward_params is not None:
+            info['objects_location'] = list(reward_params.get('objects_location', []))
+            info['is_crashed'] = bool(reward_params.get('is_crashed', False))
+            info['is_offtrack'] = bool(reward_params.get('is_offtrack', False))
+            info['closest_objects'] = list(reward_params.get('closest_objects', [-1, -1]))
+        self._last_step_info = info
+        return obs, float(reward), bool(done), False, info
 
     def close(self) -> None:
         '''Stop the car and release resources.'''
@@ -296,6 +342,11 @@ class DeepRacerEnv(gymnasium.Env):
             self._agent.send_action(np.array([0.0, 0.0], dtype=np.float32))
         except Exception:
             pass
+        if self._obstacle_manager is not None:
+            try:
+                self._obstacle_manager.teardown()
+            except Exception as ex:
+                LOG.warning('Obstacle teardown failed during close(): %s', ex)
 
     def render(self) -> None:  # type: ignore[override]
         '''Rendering is handled externally by Gazebo / RViz.'''

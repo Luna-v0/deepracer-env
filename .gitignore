@@ -7,3 +7,12 @@ build/
 log/
 simulation/meshes/Singapore/textures/Singapore_Track_Pre-Production.psd
 .vscode/
+
+# Local-only working directories: planning notes, scratch scripts, harness output
+plans/
+tools/
+# Catch-all for stray media if a run writes outside tools/
+*.mp4
+*.mkv
+*.webm
+*.avi

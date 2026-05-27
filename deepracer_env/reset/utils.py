@@ -40,6 +40,10 @@ def construct_reset_rules_manager(config_dict):
         config_dict[ConfigParams.NUMBER_OF_TRIALS.value]))
     reset_rules_manager.add(ImmobilizedResetRule())
     reset_rules_manager.add(OffTrackResetRule())
-    reset_rules_manager.add(CrashResetRule(config_dict[ConfigParams.AGENT_NAME.value]))
+    reset_rules_manager.add(CrashResetRule(
+        config_dict[ConfigParams.AGENT_NAME.value],
+        terminate_on_collision=config_dict.get(
+            ConfigParams.TERMINATE_ON_COLLISION.value, True),
+    ))
     reset_rules_manager.add(ReverseResetRule())
     return reset_rules_manager

@@ -24,10 +24,24 @@ from deepracer_env.metrics.constants import EpisodeStatus
 class CrashResetRule(AbstractResetRule):
     name = EpisodeStatus.CRASHED.value
 
-    def __init__(self, agent_name):
+    def __init__(self, agent_name, terminate_on_collision=True):
+        '''Crash reset rule.
+
+        Args:
+            agent_name (str): racecar agent name.
+            terminate_on_collision (bool): when True (default, faithful to AWS
+                DeepRacer Object Avoidance), a detected collision flags the
+                rule as done so the controller terminates / mercy-resets the
+                episode. When False, the collision is still recorded
+                (crashed_object_name is reported through agent_info, and the
+                ``is_crashed`` reward param is set on the offending step), but
+                ``done`` stays False so the cost signal stays alive across
+                the full trajectory — used by D3's safety-1 cost level.
+        '''
         super(CrashResetRule, self).__init__(CrashResetRule.name)
         self._track_data = TrackData.get_instance()
         self._agent_name = agent_name
+        self._terminate_on_collision = terminate_on_collision
 
     def _update(self, agent_status):
         '''Update the crash reset rule done flag
@@ -40,6 +54,7 @@ class CrashResetRule(AbstractResetRule):
         '''
         crashed_object_name = self._track_data.get_collided_object_name(
             self._agent_name)
-        self._done = crashed_object_name != ''
+        is_collided = crashed_object_name != ''
+        self._done = is_collided and self._terminate_on_collision
         return {AgentInfo.CRASHED_OBJECT_NAME.value: crashed_object_name,
                 AgentInfo.START_NDIST.value: agent_status[AgentCtrlStatus.START_NDIST.value]}

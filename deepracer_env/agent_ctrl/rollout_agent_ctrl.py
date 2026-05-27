@@ -80,6 +80,8 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         self._reset_rules_manager = construct_reset_rules_manager(config_dict)
         self._config_dict = config_dict
         self._done_condition = config_dict.get(const.ConfigParams.DONE_CONDITION.value, any)
+        self._terminate_on_collision = config_dict.get(
+            const.ConfigParams.TERMINATE_ON_COLLISION.value, True)
         self._number_of_resets = config_dict[const.ConfigParams.NUMBER_OF_RESETS.value]
         self._penalties = {EpisodeStatus.OFF_TRACK.value: config_dict.get(const.ConfigParams.OFF_TRACK_PENALTY.value, 0.0),
                            EpisodeStatus.CRASHED.value: config_dict.get(const.ConfigParams.COLLISION_PENALTY.value, 0.0),
@@ -202,6 +204,16 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
     @property
     def simapp_version(self):
         return self._simapp_version_
+
+    @property
+    def reward_params(self):
+        '''Read-only view of the most recently computed reward-function params.
+
+        Returned by :meth:`DeepRacerEnv.step` (and ``reset``) as part of the
+        ``info`` dict so wrappers can read collision / off-track / object
+        flags without re-computing them.
+        '''
+        return self._reward_params_
 
     def reset_agent(self):
         '''reset agent by reseting member variables, reset s3 metrics, and reset agent to
@@ -591,18 +603,24 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         '''
         # check agent status to update reward and done flag
         reset_rules_status = self._reset_rules_manager.get_dones()
-        self._reward_params_[const.RewardParam.CRASHED.value[0]] = \
-            reset_rules_status[EpisodeStatus.CRASHED.value]
+        # Source is_crashed from the raw collision signal in agent_info so it
+        # remains accurate when terminate_on_collision is False (in which case
+        # CrashResetRule keeps done=False but still reports crashed_object_name).
+        agent_info = agents_info_map.get(self._agent_name_, {}) \
+            if isinstance(agents_info_map, dict) else {}
+        crashed_object_name = agent_info.get(AgentInfo.CRASHED_OBJECT_NAME.value, '')
+        self._reward_params_[const.RewardParam.CRASHED.value[0]] = (crashed_object_name != '')
         self._reward_params_[const.RewardParam.OFFTRACK.value[0]] = \
             reset_rules_status[EpisodeStatus.OFF_TRACK.value]
         episode_status, pause, done = self._check_for_episode_termination(reset_rules_status, agents_info_map)
-        if not pause and not done:
-            # If episode termination check returns status as not paused and not done, and
-            # if reset_rules_status's CRASHED is true, then the crashed object must have smaller normalize progress
-            # compare to rollout agent.
-            # - if reset_rules_status's CRASHED is false, then reward params' CRASHED should be already false.
-            # In such case, from rollout_agent's perspective, it should consider it as there is no crash.
-            # Therefore, setting reward params' CRASHED as false if not paused and not done.
+        if not pause and not done and self._terminate_on_collision:
+            # Faithful AWS DeepRacer OA semantics: if a collision was flagged
+            # but the termination check decided not to fire (e.g. the crashed
+            # object had smaller progress than the agent), do not surface it
+            # as a real crash to the reward function.
+            # When terminate_on_collision=False (D3 safety-1 mode) the raw
+            # per-step collision signal must stay alive across the
+            # trajectory, so this clearing is skipped.
             self._reward_params_[const.RewardParam.CRASHED.value[0]] = False
         if self._ctrl_status[AgentCtrlStatus.AGENT_PHASE.value] == AgentPhase.RUN.value:
             reward = self._judge_action_at_run_phase(episode_status=episode_status, pause=pause)

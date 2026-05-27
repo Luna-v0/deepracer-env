@@ -100,6 +100,8 @@ class ConfigParams(Enum):
     ROUND_ROBIN_ADVANCE_DIST = 'round_robin_advance_dist'
     START_POSITION_OFFSET = 'start_position_offset'
     ACTION_SPACE = 'action_space'
+    OBJECT_AVOIDANCE_ENABLED = 'object_avoidance_enabled'
+    TERMINATE_ON_COLLISION = 'terminate_on_collision'
 
 class RewardParam(Enum):
     '''This enum contains the keys and default values for the parameters to be
@@ -122,7 +124,7 @@ class RewardParam(Enum):
     CLS_WAYPNY = ['closest_waypoints', [0, 0]]                          # list of int: list of int with size 2 containing closest prev and next waypoint indexes
     LEFT_CENT = ['is_left_of_center', False]                            # boolean: race car left of centerline
     REVERSE = ['is_reversed', False]                                    # boolean: race car direction
-    CLOSEST_OBJECTS = ['closest_objects', [0, 0]]                       # list of int: list of int with size 2 containing closest prev and next object indexes
+    CLOSEST_OBJECTS = ['closest_objects', [-1, -1]]                     # list of int: list of int with size 2 containing closest prev and next object indexes (-1 means no object)
     OBJECT_LOCATIONS = ['objects_location', []]                         # list of tuple: list of all object (x, y) locations
     OBJECTS_LEFT_OF_CENTER = ['objects_left_of_center', []]             # list of boolean: list of all object to the left of centerline or not
     OBJECT_IN_CAMERA = ['object_in_camera', False]                      # boolean: any object in camera

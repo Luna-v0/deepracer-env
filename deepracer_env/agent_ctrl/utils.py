@@ -118,8 +118,17 @@ def set_reward_and_metrics(reward_params, step_metrics, agent_name, pos_dict, tr
             step_metrics[StepMetrics.ACTION.value] = "[{} {}]".format(action[0], action[1])
         else: # keep the index for discrete action space
             step_metrics[StepMetrics.ACTION.value] = action
+        # Always-populate object reward keys with safe defaults so user reward
+        # functions never need .get() — strict superset of pre-D1 behaviour.
+        reward_params[RewardParam.CLOSEST_OBJECTS.value[0]] = [-1, -1]
+        reward_params[RewardParam.OBJECT_LOCATIONS.value[0]] = []
+        reward_params[RewardParam.OBJECTS_LEFT_OF_CENTER.value[0]] = []
+        reward_params[RewardParam.OBJECT_SPEEDS.value[0]] = []
+        reward_params[RewardParam.OBJECT_HEADINGS.value[0]] = []
+        reward_params[RewardParam.OBJECT_CENTER_DISTS.value[0]] = []
+        reward_params[RewardParam.OBJECT_CENTERLINE_PROJECTION_DISTANCES.value[0]] = []
+        reward_params[RewardParam.OBJECT_IN_CAMERA.value[0]] = False
         # set extra reward param for obstacle
-        model_heading = reward_params[RewardParam.HEADING.value[0]]
         obstacle_reward_params = track_data.get_object_reward_params(agent_name,
                                                                      model_point,
                                                                      car_pose)

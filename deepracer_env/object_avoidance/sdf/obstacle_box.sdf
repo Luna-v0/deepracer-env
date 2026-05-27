@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!--
+Minimal in-tree static obstacle used by D1 Object Avoidance.
+
+Visual size matches the AWS DeepRacer cardboard-box obstacle. The collision
+geometry is intentionally slightly smaller than the bounding box dimensions
+recorded in TrackData.ObstacleDimensions.BOX_OBSTACLE_DIMENSION (0.4 x 0.5),
+which already include a 0.1 m safety buffer for the Python bbox check that
+runs on every step.
+-->
+<sdf version="1.6">
+  <model name="obstacle">
+    <static>true</static>
+    <link name="link">
+      <!-- Link origin sits at the centre of the box; combined with the
+           manager's model pose (z = half of box height) the box rests on
+           the track surface. -->
+      <pose>0 0 0 0 0 0</pose>
+      <inertial>
+        <mass>1.0</mass>
+        <inertia>
+          <ixx>0.05</ixx><iyy>0.05</iyy><izz>0.05</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>0.30 0.40 0.40</size>
+          </box>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>0.30 0.40 0.40</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.78 0.55 0.30 1.0</ambient>
+          <diffuse>0.78 0.55 0.30 1.0</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>
