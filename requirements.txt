@@ -5,3 +5,8 @@ numpy>=1.24
 scipy
 shapely>=1.6
 opencv-python>=4.9
+# D3 — constrained-RL adapter / registered IDs. Required dependency per
+# plans/03-safety-gymnasium.md (Q11). If unavailable in the runtime
+# environment the safety_env wrapper still works; only the
+# safety_gymnasium-side registered IDs are skipped.
+safety-gymnasium>=1.0
