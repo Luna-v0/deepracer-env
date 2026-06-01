@@ -37,6 +37,12 @@ Repository = "https://github.com/aws-deepracer-community/deepracer-env"
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }
 
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"deepracer_env.object_avoidance" = ["sdf/*.sdf"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["deepracer_env*"]
