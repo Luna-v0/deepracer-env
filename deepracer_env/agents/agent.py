@@ -89,6 +89,29 @@ class Agent(object):
         '''Run end-of-episode housekeeping in the controller.'''
         self._ctrl_.finish_episode()
 
+    def reset_track_data(self):
+        '''Rebind the controller to the rebuilt ``TrackData`` singleton.
+
+        Used by :meth:`DeepRacerEnv.set_world` after a runtime world swap.
+        No-op if the controller does not support rebinding.
+        '''
+        rebind = getattr(self._ctrl_, 'reset_track_data', None)
+        if callable(rebind):
+            rebind()
+
+    def drain_sensors(self):
+        '''Flush buffered sensor frames from the previous world and block until
+        one fresh frame has arrived.
+
+        After a world swap the camera/LIDAR buffers still hold frames rendered
+        against the old track. Clearing them and pulling one fresh ``get_state``
+        guarantees the next observation reflects the new world.
+        '''
+        if self._sensor_ is not None:
+            self._sensor_.reset()
+            return self._sensor_.get_state()
+        return None
+
     # ------------------------------------------------------------------
     # Step-level control
     # ------------------------------------------------------------------

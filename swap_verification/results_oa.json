@@ -1,0 +1,34 @@
+{
+  "phase": "oa",
+  "checks": [
+    {
+      "name": "oa_obstacles_present_before",
+      "ok": true,
+      "detail": "gazebo=['obstacle_0', 'obstacle_1', 'obstacle_2'] registered=['obstacle_0', 'obstacle_1', 'obstacle_2']"
+    },
+    {
+      "name": "oa_stale_models_gone",
+      "ok": true,
+      "detail": "obstacles in gazebo after swap: ['obstacle_0', 'obstacle_1', 'obstacle_2']"
+    },
+    {
+      "name": "oa_manager_rebound_to_new_track",
+      "ok": true,
+      "detail": "mgr._track_data is new=True waypoints_match=True"
+    },
+    {
+      "name": "oa_obstacles_on_new_track",
+      "ok": true,
+      "detail": "max dist to trackB centerline = 0.27m"
+    },
+    {
+      "name": "oa_deterministic_layout",
+      "ok": true,
+      "detail": "layout1=[(6.483, -4.606), (7.028, 1.463), (9.628, -3.37)] layout2=[(6.483, -4.606), (7.028, 1.463), (9.628, -3.37)]"
+    }
+  ],
+  "artifacts": [
+    "oa_arctic_pro.png"
+  ],
+  "summary": "5/5 checks passed"
+}

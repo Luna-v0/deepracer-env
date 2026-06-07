@@ -1,0 +1,78 @@
+{
+  "phase": "main",
+  "checks": [
+    {
+      "name": "onboard_before_frame",
+      "ok": true,
+      "detail": "reinvent_base start-line view"
+    },
+    {
+      "name": "racetrack_count_before",
+      "ok": true,
+      "detail": "count=1"
+    },
+    {
+      "name": "set_world_no_exception",
+      "ok": true,
+      "detail": "0.7s"
+    },
+    {
+      "name": "racetrack_count_after",
+      "ok": true,
+      "detail": "count=1"
+    },
+    {
+      "name": "waypoints_match_route_file",
+      "ok": true,
+      "detail": "td=(238, 2) route=(238, 2)"
+    },
+    {
+      "name": "reward_geometry_moved",
+      "ok": true,
+      "detail": "probe d_center 0.000->0.886, on_track True->False"
+    },
+    {
+      "name": "episode_200_steps_on_new_track",
+      "ok": true,
+      "detail": "ran 200 steps"
+    },
+    {
+      "name": "drive_mp4_written",
+      "ok": true,
+      "detail": "90 frames"
+    },
+    {
+      "name": "swap_Spain_track",
+      "ok": true,
+      "detail": "waypoints_match=True racetrack_count=1 crashed_in_episode=False"
+    },
+    {
+      "name": "swap_Tokyo_Training_track",
+      "ok": true,
+      "detail": "waypoints_match=True racetrack_count=1 crashed_in_episode=False"
+    },
+    {
+      "name": "swap_Vegas_track",
+      "ok": true,
+      "detail": "waypoints_match=True racetrack_count=1 crashed_in_episode=False"
+    },
+    {
+      "name": "swap_reinvent_base",
+      "ok": true,
+      "detail": "waypoints_match=True racetrack_count=1 crashed_in_episode=False"
+    }
+  ],
+  "artifacts": [
+    "before_reinvent_base.png",
+    "before_reinvent_base.png",
+    "topdown_reinvent_base.png",
+    "after_arctic_pro.png",
+    "topdown_arctic_pro.png",
+    "drive_arctic_pro.mp4",
+    "topdown_Spain_track.png",
+    "topdown_Tokyo_Training_track.png",
+    "topdown_Vegas_track.png",
+    "topdown_reinvent_base.png"
+  ],
+  "summary": "12/12 checks passed"
+}

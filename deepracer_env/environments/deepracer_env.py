@@ -264,6 +264,16 @@ class DeepRacerEnv(gymnasium.Env):
         # Store last step info for diagnostics
         self._last_step_info: Dict[str, Any] = {}
 
+        # Runtime world-swap state. The WorldSwapper (Gazebo spawn/delete
+        # plumbing) is created lazily on the first set_world() call so that
+        # importing / constructing the env never requires a live ROS graph
+        # beyond what the agent already needs. set_world() is only valid
+        # between episodes, so it is gated on at least one reset() having run.
+        self._world_swapper = None
+        self._has_reset: bool = False
+        self._pause_srv = None
+        self._unpause_srv = None
+
     # ------------------------------------------------------------------
     # Core gymnasium.Env interface
     # ------------------------------------------------------------------
@@ -294,6 +304,7 @@ class DeepRacerEnv(gymnasium.Env):
             'is_crashed': False,
         }
         self._last_step_info = info
+        self._has_reset = True
         return obs, info
 
     def step(
@@ -351,6 +362,140 @@ class DeepRacerEnv(gymnasium.Env):
     def render(self) -> None:  # type: ignore[override]
         '''Rendering is handled externally by Gazebo / RViz.'''
         pass
+
+    # ------------------------------------------------------------------
+    # Runtime world swap
+    # ------------------------------------------------------------------
+
+    def set_world(self, world_name: str) -> None:
+        '''Swap the rendered track to *world_name* at runtime, without
+        restarting Gazebo.
+
+        **Between-episodes contract.** This may only be called *between*
+        episodes: after :meth:`reset` has run at least once and after the
+        previous episode has terminated (i.e. before the next :meth:`reset`).
+        It is **not** safe to call mid-episode — it deletes and respawns the
+        track model, rebuilds the :class:`TrackData` geometry the reward and
+        reset rules depend on, and teleports the car. Calling it before the
+        first :meth:`reset` raises :class:`RuntimeError`.
+
+        The swap, in order (all under ``pause_physics`` so the car never
+        free-falls onto a missing track):
+
+        1. Validate the target world's assets exist.
+        2. Pause physics.
+        3. Tear down object-avoidance obstacles against the *old* ``TrackData``.
+        4. Delete the live ``racetrack`` model(s).
+        5. Spawn the new track via an ``<include>`` wrapper SDF (Gazebo
+           resolves the mesh paths, sidestepping SDF-filename inconsistencies).
+        6. Rebuild ``TrackData`` + ``FrustumManager`` and rebind every cached
+           reference (controller, reset rules, obstacle manager).
+        7. Reset the car onto the new start line.
+        8. Unpause physics, drain stale sensor frames, wait for a fresh one.
+
+        Idempotent: ``set_world(current_world)`` performs a clean rebuild
+        rather than crashing.
+
+        Args:
+            world_name: Target world (e.g. ``"arctic_pro"``). Must have both
+                ``routes/<world>.npy`` and ``models/<world>/`` installed in the
+                ``deepracer_simulation_environment`` package.
+
+        Raises:
+            RuntimeError: if called before the first :meth:`reset`.
+            ValueError: if the target world's assets are missing.
+        '''
+        import rospy
+        from std_srvs.srv import Empty
+        from deepracer_env.environments.world_swap import WorldSwapper
+        from deepracer_env.rospy_wrappers import ServiceProxyWrapper
+        from deepracer_env.track_geom.constants import (
+            PAUSE_PHYSICS, UNPAUSE_PHYSICS,
+        )
+        from deepracer_env.track_geom.track_data import TrackData
+        from deepracer_env.cameras.frustum_manager import FrustumManager
+
+        if not self._has_reset:
+            raise RuntimeError(
+                'set_world() is only valid between episodes; call reset() at '
+                'least once before swapping the world.')
+
+        if self._world_swapper is None:
+            self._world_swapper = WorldSwapper()
+        swapper = self._world_swapper
+
+        # Fail fast on a bad world name BEFORE touching Gazebo, so a typo can
+        # never leave the simulation track-less.
+        swapper.validate(world_name)
+
+        current_world = rospy.get_param('WORLD_NAME', None)
+        LOG.info('set_world(%r): swapping from %r', world_name, current_world)
+
+        # Lazily create the pause/unpause proxies.
+        if self._pause_srv is None:
+            rospy.wait_for_service(PAUSE_PHYSICS, timeout=30.0)
+            self._pause_srv = ServiceProxyWrapper(PAUSE_PHYSICS, Empty)
+        if self._unpause_srv is None:
+            rospy.wait_for_service(UNPAUSE_PHYSICS, timeout=30.0)
+            self._unpause_srv = ServiceProxyWrapper(UNPAUSE_PHYSICS, Empty)
+
+        try:
+            self._pause_srv()
+
+            # 1. Tear down OA obstacles while the OLD TrackData is still live
+            #    (teardown both deletes the Gazebo models and unregisters them
+            #    from the current — correct — TrackData).
+            if self._obstacle_manager is not None:
+                try:
+                    self._obstacle_manager.teardown()
+                except Exception as ex:  # noqa: BLE001
+                    LOG.warning('Obstacle teardown during set_world failed: %s', ex)
+
+            # 2. Delete the live track, spawn the new one.
+            swapper.delete_track()
+            swapper.spawn_track(world_name)
+            if not swapper.confirm_track_present():
+                raise RuntimeError(
+                    'set_world(%r): new track model did not appear in Gazebo'
+                    % world_name)
+
+            # 3. Rebuild track geometry. Clearing the singleton + WORLD_NAME and
+            #    re-getting forces a fresh load of routes/<world>.npy.
+            TrackData._instance_ = None
+            rospy.set_param('WORLD_NAME', world_name)
+            TrackData.get_instance()
+            # FrustumManager caches camera-frustum geometry keyed on the old
+            # track; drop it so object_in_camera recomputes for the new world.
+            FrustumManager._instance_ = None
+
+            # 4. Rebind cached references. The controller holds the old
+            #    TrackData + derived start geometry and re-registers the agent;
+            #    the reset rules are rebuilt inside reset_track_data().
+            self._agent.reset_track_data()
+
+            # 5. Rebind the obstacle manager to the new TrackData. There is no
+            #    setter, so reconstruct it preserving the original config. The
+            #    next reset() will respawn obstacles on the NEW track.
+            if self._oa_cfg is not None and self._oa_cfg.enabled:
+                from deepracer_env.object_avoidance import ObstacleManager
+                self._obstacle_manager = ObstacleManager(
+                    self._oa_cfg, TrackData.get_instance())
+
+            # 6. Put the car on the new start line (reuses the controller's
+            #    existing blocking SetModelState reset path).
+            self._agent.ctrl.reset_agent()
+        finally:
+            # Always unpause, even if the swap blew up half-way, so the sim is
+            # never left frozen.
+            try:
+                self._unpause_srv()
+            except Exception as ex:  # noqa: BLE001
+                LOG.error('Failed to unpause physics after set_world: %s', ex)
+
+        # 7. Discard frames buffered against the old track and block for a
+        #    fresh one so the next observation reflects the new world.
+        self._agent.drain_sensors()
+        LOG.info('set_world(%r): swap complete', world_name)
 
     # ------------------------------------------------------------------
     # Convenience helpers

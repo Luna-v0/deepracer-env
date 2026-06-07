@@ -185,6 +185,52 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         self.current_obstacle_pose = None
         self.current_obstacle_crash_count = 0
 
+    def reset_track_data(self):
+        '''Rebind every cached :class:`TrackData`-derived value to the *current*
+        ``TrackData`` singleton.
+
+        Called by :meth:`DeepRacerEnv.set_world` after the singleton has been
+        rebuilt for a new world. The controller caches the old instance in
+        ``self._track_data_`` plus several derived quantities (start lane,
+        start-line offset) and registers the agent in the old instance's
+        ``object_poses``; the reset-rule manager's rules likewise each hold the
+        old instance. Without this rebind the reward geometry, start pose, and
+        off-track/crash detection would all keep using the discarded track.
+
+        Must be called between episodes (after the swap, before the next
+        :meth:`reset_agent`).
+        '''
+        with self._lock:
+            self._track_data_ = TrackData.get_instance()
+            # Start lane depends on the (possibly different) track geometry.
+            if self._agent_idx_ is not None:
+                self._start_lane_ = self._track_data_.inner_lane \
+                    if self._agent_idx_ % 2 else self._track_data_.outer_lane
+            else:
+                self._start_lane_ = self._track_data_.center_line
+            # Track length changes between worlds -> recompute the normalized
+            # start-position offset exactly as __init__ does.
+            start_pos_offset = self._config_dict.get(
+                const.ConfigParams.START_POSITION.value, 0.0)
+            self._start_line_ndist_offset = \
+                start_pos_offset / self._track_data_.get_track_length()
+            # The reset rules (off-track / crash) each cached the OLD TrackData
+            # in their __init__; rebuilding the manager binds them to the new
+            # instance via TrackData.get_instance().
+            self._reset_rules_manager = construct_reset_rules_manager(self._config_dict)
+            # Register the agent on the new track so start-pose computation and
+            # get_object_pose work against the freshly-built object_poses.
+            start_pose = self._start_lane_.interpolate_pose(
+                (self._data_dict_['start_ndist'] + self._start_line_ndist_offset)
+                * self._track_data_.get_track_length(),
+                finite_difference=FiniteDifference.FORWARD_DIFFERENCE)
+            self._track_data_.initialize_object(
+                self._agent_name_, start_pose, ObstacleDimensions.BOT_CAR_DIMENSION)
+            self._pause_car_model_pose = self._track_data_.get_object_pose(self._agent_name_)
+            self._prepare_car_model_pose = self._track_data_.get_object_pose(self._agent_name_)
+        LOG.info("RolloutCtrl rebound to new TrackData (track_length=%.2f)",
+                 self._track_data_.get_track_length())
+
     def update_tracker(self, delta_time, sim_time):
         """
         Callback when sim time is updated

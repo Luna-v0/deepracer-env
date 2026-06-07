@@ -26,6 +26,15 @@ SET_MODEL_STATES = '/gazebo/set_model_states'
 SPAWN_URDF_MODEL = '/gazebo/spawn_urdf_model'
 SPAWN_SDF_MODEL = '/gazebo/spawn_sdf_model'
 DELETE_MODEL = '/gazebo/delete_model'
+GET_WORLD_PROPERTIES = '/gazebo/get_world_properties'
+PAUSE_PHYSICS = '/gazebo/pause_physics'
+UNPAUSE_PHYSICS = '/gazebo/unpause_physics'
+
+# Gazebo model name under which every <world> file loads its track mesh
+# (the <include>'s <name> tag). True for all shipped worlds, including the
+# multi-include ones (reinvent_base_jeremiah loads two meshes, both named
+# "racetrack"). The runtime track-swap deletes by this name.
+RACETRACK_MODEL_NAME = 'racetrack'
 
 SPLINE_DEGREE = 3
 
