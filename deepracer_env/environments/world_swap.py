@@ -31,6 +31,7 @@ non-``sun`` / non-``ground_plane`` ``<include>`` verbatim.
 '''
 import logging
 import os
+import time
 import xml.etree.ElementTree as ET
 
 import rospkg
@@ -41,7 +42,6 @@ from gazebo_msgs.srv import (
 from geometry_msgs.msg import Pose
 
 from deepracer_env.log_handler.logger import Logger
-from deepracer_env.rospy_wrappers import ServiceProxyWrapper
 from deepracer_env.track_geom.constants import (
     SPAWN_SDF_MODEL, DELETE_MODEL, GET_WORLD_PROPERTIES,
     RACETRACK_MODEL_NAME,
@@ -50,6 +50,14 @@ from deepracer_env.track_geom.constants import (
 LOG = Logger(__name__, logging.INFO).get_logger()
 
 _SIM_PKG = "deepracer_simulation_environment"
+
+
+class WorldSwapError(RuntimeError):
+    '''Raised when the Gazebo side of a track swap fails unrecoverably — most
+    importantly when ``gzserver`` dies mid-swap (an intermittent Gazebo
+    segfault on ``delete_model`` of a mesh model). Callers that loop swaps
+    (training rotation) should catch this, checkpoint, and restart the sim
+    container rather than spinning on a dead ROS master.'''
 
 # Includes that are part of the scene scaffolding, not the track itself.
 _NON_TRACK_INCLUDE_MODELS = ("sun", "ground_plane")
@@ -108,16 +116,33 @@ class WorldSwapper(object):
     # ------------------------------------------------------------------
 
     def _ensure_services(self):
+        # Plain ServiceProxy (NOT ServiceProxyWrapper): a swap must fail fast
+        # and raise a catchable error if gzserver dies. The wrapper retries 5×
+        # then sleeps ROBOMAKER_CANCEL_JOB_WAIT_TIME (5 min) and exits the
+        # process — exactly wrong when a looped caller wants to recover.
         if self._spawn_srv is None:
             rospy.wait_for_service(SPAWN_SDF_MODEL, timeout=30.0)
-            self._spawn_srv = ServiceProxyWrapper(SPAWN_SDF_MODEL, SpawnModel)
+            self._spawn_srv = rospy.ServiceProxy(SPAWN_SDF_MODEL, SpawnModel)
         if self._delete_srv is None:
             rospy.wait_for_service(DELETE_MODEL, timeout=30.0)
-            self._delete_srv = ServiceProxyWrapper(DELETE_MODEL, DeleteModel)
+            self._delete_srv = rospy.ServiceProxy(DELETE_MODEL, DeleteModel)
         if self._world_props_srv is None:
             rospy.wait_for_service(GET_WORLD_PROPERTIES, timeout=30.0)
-            self._world_props_srv = ServiceProxyWrapper(
+            self._world_props_srv = rospy.ServiceProxy(
                 GET_WORLD_PROPERTIES, GetWorldProperties)
+
+    def gazebo_alive(self, timeout=3.0):
+        '''Return True iff gzserver still answers a service call.
+
+        Used to turn an intermittent gzserver segfault during a swap into a
+        clean, catchable :class:`WorldSwapError` instead of a 30×
+        "unable to contact master" retry storm.'''
+        try:
+            rospy.wait_for_service(GET_WORLD_PROPERTIES, timeout=timeout)
+            rospy.ServiceProxy(GET_WORLD_PROPERTIES, GetWorldProperties)()
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def current_model_names(self):
         '''Return the list of model names currently present in Gazebo.'''
@@ -184,7 +209,11 @@ class WorldSwapper(object):
     # ------------------------------------------------------------------
 
     def delete_track(self):
-        '''Delete every live track model. Returns the deleted names.'''
+        '''Delete every live track model, then confirm it is gone.
+
+        Raises :class:`WorldSwapError` if gzserver dies during the delete (the
+        intermittent Gazebo segfault on mesh ``delete_model``) so the caller
+        can recover instead of hanging on a dead master.'''
         self._ensure_services()
         deleted = []
         for name in self._track_model_names():
@@ -195,8 +224,22 @@ class WorldSwapper(object):
                 else:
                     LOG.warning("delete_model(%s) reported failure: %s",
                                 name, getattr(resp, "status_message", ""))
-            except Exception as ex:  # noqa: BLE001 - logged, swap continues
-                LOG.warning("delete_model(%s) raised: %s", name, ex)
+            except Exception as ex:  # noqa: BLE001
+                # A raised delete is the classic symptom of gzserver
+                # segfaulting on a mesh delete. Distinguish "gazebo is dead"
+                # (unrecoverable) from a transient hiccup.
+                if not self.gazebo_alive():
+                    raise WorldSwapError(
+                        "gzserver died while deleting track model {!r} "
+                        "(intermittent Gazebo segfault on delete_model): "
+                        "{}".format(name, ex))
+                LOG.warning("delete_model(%s) raised but gazebo alive: %s",
+                            name, ex)
+        # The old track must be fully gone before a same-named 'racetrack' is
+        # spawned — a lingering duplicate corrupts Gazebo's model list.
+        if not self.confirm_track_absent():
+            LOG.warning("track model(s) still present after delete: %s",
+                        self._track_model_names())
         LOG.info("WorldSwapper deleted track model(s): %s", deleted)
         return deleted
 
@@ -207,13 +250,20 @@ class WorldSwapper(object):
         # Tracks are authored at the world origin; the <include> blocks carry
         # their own relative <pose> tags, so spawn the model root at identity.
         # (rospy serialisation rejects a None Pose, hence an explicit one.)
-        resp = self._spawn_srv(
-            RACETRACK_MODEL_NAME,   # model_name
-            sdf,                    # model_xml
-            '',                     # robot_namespace
-            Pose(),                 # initial_pose (identity; SDF carries poses)
-            '',                     # reference_frame
-        )
+        try:
+            resp = self._spawn_srv(
+                RACETRACK_MODEL_NAME,   # model_name
+                sdf,                    # model_xml
+                '',                     # robot_namespace
+                Pose(),                 # initial_pose (identity; SDF carries poses)
+                '',                     # reference_frame
+            )
+        except Exception as ex:  # noqa: BLE001
+            if not self.gazebo_alive():
+                raise WorldSwapError(
+                    "gzserver died while spawning track for world {!r}: "
+                    "{}".format(world_name, ex))
+            raise
         if not getattr(resp, "success", True):
             raise RuntimeError(
                 "spawn_sdf_model for world {!r} failed: {}".format(
@@ -221,11 +271,22 @@ class WorldSwapper(object):
         LOG.info("WorldSwapper spawned track for world %r", world_name)
 
     def confirm_track_present(self, timeout=10.0):
-        '''Block until at least one ``racetrack`` model is registered in
-        Gazebo (or *timeout* elapses). Returns ``True`` on success.'''
-        deadline = rospy.get_time() + timeout
-        while rospy.get_time() < deadline:
+        '''Block (wall-clock) until at least one ``racetrack`` model is
+        registered in Gazebo (or *timeout* elapses). Uses ``time`` not
+        ``rospy.sleep`` because the sim clock is frozen during the swap.'''
+        deadline = time.time() + timeout
+        while time.time() < deadline:
             if self._track_model_names():
                 return True
-            rospy.sleep(0.1)
+            time.sleep(0.1)
         return bool(self._track_model_names())
+
+    def confirm_track_absent(self, timeout=10.0):
+        '''Block (wall-clock) until no ``racetrack`` model remains in Gazebo
+        (or *timeout* elapses). Returns ``True`` once the track is gone.'''
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not self._track_model_names():
+                return True
+            time.sleep(0.1)
+        return not self._track_model_names()

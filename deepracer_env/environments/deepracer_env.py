@@ -404,11 +404,14 @@ class DeepRacerEnv(gymnasium.Env):
         Raises:
             RuntimeError: if called before the first :meth:`reset`.
             ValueError: if the target world's assets are missing.
+            WorldSwapError: if ``gzserver`` dies mid-swap (an intermittent
+                Gazebo segfault on mesh ``delete_model``). The sim is then
+                unrecoverable in-process; a looped caller should checkpoint and
+                restart the simulator container.
         '''
         import rospy
         from std_srvs.srv import Empty
-        from deepracer_env.environments.world_swap import WorldSwapper
-        from deepracer_env.rospy_wrappers import ServiceProxyWrapper
+        from deepracer_env.environments.world_swap import WorldSwapper, WorldSwapError
         from deepracer_env.track_geom.constants import (
             PAUSE_PHYSICS, UNPAUSE_PHYSICS,
         )
@@ -431,13 +434,15 @@ class DeepRacerEnv(gymnasium.Env):
         current_world = rospy.get_param('WORLD_NAME', None)
         LOG.info('set_world(%r): swapping from %r', world_name, current_world)
 
-        # Lazily create the pause/unpause proxies.
+        # Lazily create the pause/unpause proxies. Plain ServiceProxy (not the
+        # ServiceProxyWrapper) so a swap that hits a dead gzserver fails fast
+        # and is catchable, instead of the wrapper's 5-minute retry-then-exit.
         if self._pause_srv is None:
             rospy.wait_for_service(PAUSE_PHYSICS, timeout=30.0)
-            self._pause_srv = ServiceProxyWrapper(PAUSE_PHYSICS, Empty)
+            self._pause_srv = rospy.ServiceProxy(PAUSE_PHYSICS, Empty)
         if self._unpause_srv is None:
             rospy.wait_for_service(UNPAUSE_PHYSICS, timeout=30.0)
-            self._unpause_srv = ServiceProxyWrapper(UNPAUSE_PHYSICS, Empty)
+            self._unpause_srv = rospy.ServiceProxy(UNPAUSE_PHYSICS, Empty)
 
         try:
             self._pause_srv()
@@ -486,11 +491,17 @@ class DeepRacerEnv(gymnasium.Env):
             self._agent.ctrl.reset_agent()
         finally:
             # Always unpause, even if the swap blew up half-way, so the sim is
-            # never left frozen.
-            try:
-                self._unpause_srv()
-            except Exception as ex:  # noqa: BLE001
-                LOG.error('Failed to unpause physics after set_world: %s', ex)
+            # never left frozen — but skip it if gzserver has died (a dead
+            # service would otherwise block), letting the WorldSwapError
+            # propagate to the caller.
+            if swapper.gazebo_alive():
+                try:
+                    self._unpause_srv()
+                except Exception as ex:  # noqa: BLE001
+                    LOG.error('Failed to unpause physics after set_world: %s', ex)
+            else:
+                LOG.error('gzserver is not responding after set_world(%r); '
+                          'skipping unpause', world_name)
 
         # 7. Discard frames buffered against the old track and block for a
         #    fresh one so the next observation reflects the new world.
