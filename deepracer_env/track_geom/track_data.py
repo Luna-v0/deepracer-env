@@ -178,21 +178,43 @@ class TrackData(object):
         '''
         return self._park_location
 
-    def __init__(self):
-        '''Instantiates the class and creates clients for the relevant ROS services'''
+    @classmethod
+    def create(cls, world_name, offset=(0.0, 0.0)):
+        '''Standalone (NON-singleton) TrackData for a multi-car world — one per
+        car. ``world_name`` picks the track's route; ``offset`` (dx, dy) shifts the
+        whole track's waypoints to that car's track instance world location, so a
+        car's world pose compares directly against its own offset track geometry.
+        See ``MultiAgentDeepRacerEnv`` / docs/reports/multi-car.md.'''
+        return cls(world_name=world_name, offset=offset, register_singleton=False)
+
+    def __init__(self, world_name=None, offset=(0.0, 0.0), register_singleton=True):
+        '''Instantiates the class and creates clients for the relevant ROS services.
+
+        ``world_name`` defaults to the ``WORLD_NAME`` rosparam (single-car).
+        ``offset`` shifts the track geometry by (dx, dy) for a separated track
+        instance. ``register_singleton`` keeps the classic single-agent
+        ``get_instance()`` behaviour; multi-car passes ``False`` (via ``create``).'''
         self._park_positions_ = deque()
         self._park_location = ParkLocation(rospy.get_param("PARK_LOCATION", ParkLocation.BOTTOM.value).lower())
         self._reverse_dir_ = utils.str2bool(rospy.get_param("REVERSE_DIR", False))
-        if TrackData._instance_ is not None:
+        if register_singleton and TrackData._instance_ is not None:
             raise GenericRolloutException("Attempting to construct multiple TrackData objects")
         try:
             rospack = rospkg.RosPack()
             deepracer_path = rospack.get_path("deepracer_simulation_environment")
+            world = world_name if world_name is not None else rospy.get_param("WORLD_NAME")
             waypoints_path = os.path.join(deepracer_path, "routes",
-                                          "{}.npy".format(rospy.get_param("WORLD_NAME")))
+                                          "{}.npy".format(world))
             self._is_bot_car_ = int(rospy.get_param("NUMBER_OF_BOT_CARS", 0)) > 0
             self._bot_car_speed_ = float(rospy.get_param("BOT_CAR_SPEED", 0.0))
             waypoints = np.load(waypoints_path)
+            # Shift the whole track (center/inner/outer x,y columns) to this
+            # instance's world location for separated multi-car track instances.
+            ox, oy = float(offset[0]), float(offset[1])
+            if ox or oy:
+                waypoints = waypoints.copy()
+                waypoints[:, [0, 2, 4]] += ox   # x of center, inner, outer
+                waypoints[:, [1, 3, 5]] += oy   # y of center, inner, outer
 
             self.is_loop = np.all(waypoints[0, :] == waypoints[-1, :])
             poly_func = LinearRing if self.is_loop else LineString

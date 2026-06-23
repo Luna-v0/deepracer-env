@@ -14,18 +14,31 @@ lives in dr-gym ``gym_dr/envs/multi_car.py``. See ``docs/reports/multi-car.md``.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+import math
+import os
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from deepracer_env.environments.deepracer_env import DEFAULT_ACTION_SPACE, build_agent
 
 
-class MultiAgentDeepRacerEnv:
-    """N independent agents sharing one Gazebo world.
+def grid_offsets(n_cars: int, spacing: float) -> List[Tuple[float, float]]:
+    """Square-grid world (dx, dy) offsets for N separated track instances; car 0
+    at the origin (reuses the launch's .world track)."""
+    cols = max(1, math.ceil(math.sqrt(n_cars)))
+    return [((i % cols) * spacing, (i // cols) * spacing) for i in range(n_cars)]
 
-    Args mirror ``DeepRacerEnv`` plus ``n_cars``. Each car gets its own ``Agent``
-    on the ``racecar_{i}`` namespace (the cars must already be spawned by the
-    ``multicar`` launch). ``reward_fn`` is shared (stateless); per-car identity is
-    available in the params it receives.
+
+class MultiAgentDeepRacerEnv:
+    """N independent agents on **separated track instances** in one Gazebo world.
+
+    Each car gets its own ``racecar_{i}`` ``Agent`` AND its own track instance:
+    car 0 drives the launch's origin track; cars 1.. get a copy (or a different
+    track, for diversity) spawned ``spacing`` metres away, with a ``TrackData``
+    whose waypoints are shifted by the same offset. So each car has a valid start
+    on its own track, and the cars never see or collide with each other.
+
+    Args mirror ``DeepRacerEnv`` plus ``n_cars`` / ``worlds`` (per-car track name;
+    default all the same = parallel) / ``spacing``.
     """
 
     def __init__(
@@ -33,6 +46,9 @@ class MultiAgentDeepRacerEnv:
         n_cars: int,
         reward_fn: Callable[[dict], float],
         sensors: List[str],
+        world_name: Optional[str] = None,
+        worlds: Optional[Sequence[str]] = None,
+        spacing: float = 300.0,
         config: Optional[Dict[str, Any]] = None,
         is_training: bool = True,
         extra_ctrl_config: Optional[Dict[str, Any]] = None,
@@ -41,11 +57,31 @@ class MultiAgentDeepRacerEnv:
             raise ValueError(f"n_cars must be >= 1, got {n_cars}")
         self.n_cars = int(n_cars)
         self.car_names = [f"racecar_{i}" for i in range(self.n_cars)]
-        self._agents = [
-            build_agent(name, reward_fn, sensors, config=config,
-                        is_training=is_training, extra_ctrl_config=extra_ctrl_config)
-            for name in self.car_names
-        ]
+
+        base_world = world_name or os.getenv("WORLD_NAME")
+        self.worlds = list(worlds) if worlds else [base_world] * self.n_cars
+        self.offsets = grid_offsets(self.n_cars, spacing)
+
+        from deepracer_env.track_geom.track_data import TrackData
+
+        # Spawn the extra track instances (car 0 reuses the origin .world track).
+        if self.n_cars > 1:
+            from deepracer_env.environments.world_swap import WorldSwapper
+            swapper = WorldSwapper()
+            for i in range(self.n_cars):
+                ox, oy = self.offsets[i]
+                if i == 0 and ox == 0.0 and oy == 0.0:
+                    continue
+                swapper.spawn_track_instance(self.worlds[i], f"racetrack_{i}", (ox, oy))
+
+        # Build per-car (offset) TrackData + the agent bound to it.
+        self._agents = []
+        for i, name in enumerate(self.car_names):
+            track_data = TrackData.create(self.worlds[i], offset=self.offsets[i])
+            self._agents.append(
+                build_agent(name, reward_fn, sensors, config=config,
+                            is_training=is_training, extra_ctrl_config=extra_ctrl_config,
+                            track_data=track_data))
         # Per-car spaces (identical across cars; the VecEnv exposes these as its
         # single_observation_space / single_action_space).
         self.single_observation_space = self._agents[0].get_observation_space()

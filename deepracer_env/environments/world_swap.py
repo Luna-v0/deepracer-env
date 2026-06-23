@@ -270,6 +270,34 @@ class WorldSwapper(object):
                     world_name, getattr(resp, "status_message", "")))
         LOG.info("WorldSwapper spawned track for world %r", world_name)
 
+    def spawn_track_instance(self, world_name, model_name, offset=(0.0, 0.0)):
+        '''Spawn *world_name*'s track as a uniquely-named model whose root sits at
+        the world (dx, dy) *offset* — for separated multi-car track instances.
+        Each car drives its own track copy far from the others, so cars never see
+        or collide with each other. The TrackData for that car is shifted by the
+        same offset (``TrackData.create(world_name, offset)``).'''
+        self._ensure_services()
+        sdf = (
+            '<?xml version="1.0"?>\n<sdf version="1.6">\n'
+            '  <include>\n'
+            '    <uri>model://models/{}</uri>\n'
+            '    <name>{}</name>\n'
+            '  </include>\n</sdf>\n'.format(world_name, model_name))
+        pose = Pose()
+        pose.position.x = float(offset[0])
+        pose.position.y = float(offset[1])
+        try:
+            resp = self._spawn_srv(model_name, sdf, '', pose, '')
+        except Exception as ex:  # noqa: BLE001
+            if not self.gazebo_alive():
+                raise WorldSwapError(
+                    "gzserver died while spawning track instance {!r}: {}".format(model_name, ex))
+            raise
+        if not getattr(resp, "success", True):
+            raise RuntimeError("spawn track instance {!r} failed: {}".format(
+                model_name, getattr(resp, "status_message", "")))
+        LOG.info("WorldSwapper spawned track instance %r at offset %s", model_name, offset)
+
     def confirm_track_present(self, timeout=10.0):
         '''Block (wall-clock) until at least one ``racetrack`` model is
         registered in Gazebo (or *timeout* elapses). Uses ``time`` not

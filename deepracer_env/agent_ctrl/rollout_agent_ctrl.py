@@ -98,8 +98,10 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         # For single agent, agent_name racecar will return None as index. For multi agents case
         # postfix x such as racecar_x will be returned as agent index.
         self._agent_idx_ = get_racecar_idx(self._agent_name_)
-        # Get track data
-        self._track_data_ = TrackData.get_instance()
+        # Get track data. Multi-car worlds pass a per-car TrackData (its own
+        # track instance, waypoints shifted to that car's world offset) via the
+        # 'track_data' config key; single-car uses the shared singleton.
+        self._track_data_ = config_dict.get('track_data') or TrackData.get_instance()
         # Set start lane
         if self._agent_idx_ is not None:
             self._start_lane_ = self._track_data_.inner_lane \

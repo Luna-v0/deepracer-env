@@ -184,10 +184,16 @@ def _build_agent(
 
 
 def build_agent(racecar_name, reward_fn, sensors, config=None, is_training=True,
-                extra_ctrl_config=None):
-    '''Public per-car agent builder for multi-car worlds — see ``_build_agent``.'''
+                extra_ctrl_config=None, track_data=None):
+    '''Public per-car agent builder for multi-car worlds — see ``_build_agent``.
+    ``track_data`` is this car's own (offset) ``TrackData`` instance; it is passed
+    to the controller so the car computes progress/off-track/reset against its own
+    separated track instead of the shared singleton.'''
+    extra = dict(extra_ctrl_config or {})
+    if track_data is not None:
+        extra['track_data'] = track_data
     return _build_agent(reward_fn, sensors, config, is_training,
-                        extra_ctrl_config=extra_ctrl_config, racecar_name=racecar_name)
+                        extra_ctrl_config=extra, racecar_name=racecar_name)
 
 
 class DeepRacerEnv(gymnasium.Env):
