@@ -126,7 +126,15 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
             {'change_start': config_dict[const.ConfigParams.CHANGE_START.value],
              'round_robin_advance_dist': config_dict[const.ConfigParams.ROUND_ROBIN_ADVANCE_DIST.value],
              'start_position_offset': config_dict[const.ConfigParams.START_POSITION_OFFSET.value],
-             'alternate_dir': config_dict[const.ConfigParams.ALT_DIR.value]}
+             'alternate_dir': config_dict[const.ConfigParams.ALT_DIR.value],
+             # DR reset modes (dr-gym W-dr); .get keeps old configs working.
+             'random_start': config_dict.get(const.ConfigParams.RANDOM_START.value, False),
+             'random_direction': config_dict.get(const.ConfigParams.RANDOM_DIRECTION.value, False)}
+        # Dedicated RNG for the DR reset modes (reproducible, independent of the
+        # global numpy state). Seeded from the start offset so repeated runs with
+        # the same config replay the same start/direction schedule.
+        self._dr_reset_rng_ = np.random.default_rng(
+            int(config_dict.get(const.ConfigParams.START_POSITION_OFFSET.value, 0.0) * 1e6) or None)
         # Dictionary to track the previous way points
         self._prev_waypoints_ = {'prev_point' : Point(0, 0), 'prev_point_2' : Point(0, 0)}
 
@@ -881,14 +889,26 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         if not self._is_continuous:
             self._metrics.append_episode_metrics()
         self._metrics.upload_episode_metrics()
-        if self._start_pos_behavior_['change_start'] and self._is_training_:
-            self._data_dict_['start_ndist'] = (self._data_dict_['start_ndist']
-                                               + self._start_pos_behavior_['round_robin_advance_dist']) % 1.0
+        if self._is_training_:
+            # random_start (DR) takes precedence over the round-robin advance:
+            # sample a uniform normalized distance along the centerline — any
+            # ndist in [0, 1) is a valid on-track start (poses are interpolated
+            # from the track lanes). Else fall back to the deterministic advance.
+            if self._start_pos_behavior_['random_start']:
+                self._data_dict_['start_ndist'] = float(self._dr_reset_rng_.random())
+            elif self._start_pos_behavior_['change_start']:
+                self._data_dict_['start_ndist'] = (self._data_dict_['start_ndist']
+                                                   + self._start_pos_behavior_['round_robin_advance_dist']) % 1.0
         # For multi-agent case, alternating direction will NOT work!
         # Reverse direction will be set multiple times
         # However, we are not supporting multi-agent training for now
-        if self._start_pos_behavior_['alternate_dir'] and self._is_training_:
-            self._track_data_.reverse_dir = not self._track_data_.reverse_dir
+        if self._is_training_:
+            # random_direction (DR) picks a fresh coin each episode; else the
+            # deterministic alternation.
+            if self._start_pos_behavior_['random_direction']:
+                self._track_data_.reverse_dir = bool(self._dr_reset_rng_.random() < 0.5)
+            elif self._start_pos_behavior_['alternate_dir']:
+                self._track_data_.reverse_dir = not self._track_data_.reverse_dir
 
     def _clear_data(self):
         '''clear data at the beginning of a new episode

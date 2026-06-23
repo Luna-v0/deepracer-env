@@ -5,6 +5,9 @@
   <arg name="kinesis_video_stream_names" default=""/>
   <arg name="kinesis_video_stream_region" default="us-east-1" />
   <arg name="racecars_with_stereo_cameras" default="racecar" />
+  <!-- Per-car PRIMARY-camera list (camera-off / feature-obs). A car NOT in this
+       list spawns with no camera sensor/render. Default = all cars have one. -->
+  <arg name="racecars_with_cameras" default="racecar,racecar_0,racecar_1,racecar_2,racecar_3,racecar_4,racecar_5,racecar_6,racecar_7" />
   <arg name="racecars_with_lidars" default="racecar" />
   <arg name="body_shell_types" />
   <arg name="simapp_versions" />
@@ -25,6 +28,7 @@
     <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[0])"/>
     <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
     <arg name="include_second_camera" value="$(eval 'racecar' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar' in racecars_with_cameras.split(','))" />
     <arg name="include_lidar_sensor" value="$(eval 'racecar' in racecars_with_lidars.split(','))" />
     <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[0])" />
     <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names) > 0)" />
@@ -44,6 +48,7 @@
     <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[0])"/>
     <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
     <arg name="include_second_camera" value="$(eval 'racecar_0' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_0' in racecars_with_cameras.split(','))" />
     <arg name="include_lidar_sensor" value="$(eval 'racecar_0' in racecars_with_lidars.split(','))" />
     <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[0])" />
     <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names) > 0)" />
@@ -64,6 +69,7 @@
     <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[1] if len(kinesis_video_stream_names.split(',')) > 1 else '')"/>
     <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
     <arg name="include_second_camera" value="$(eval 'racecar_1' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_1' in racecars_with_cameras.split(','))" />
     <arg name="include_lidar_sensor" value="$(eval 'racecar_1' in racecars_with_lidars.split(','))" />
     <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[1])" />
     <arg name="make_required" value="$(arg make_required)" />

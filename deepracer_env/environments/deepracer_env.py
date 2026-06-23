@@ -115,6 +115,8 @@ _DEFAULT_CTRL_CONFIG: Dict[str, Any] = {
     ctrl_const.ConfigParams.REVERSE_PENALTY.value:          2.0,
     ctrl_const.ConfigParams.CHANGE_START.value:             True,
     ctrl_const.ConfigParams.ALT_DIR.value:                  False,
+    ctrl_const.ConfigParams.RANDOM_START.value:             False,
+    ctrl_const.ConfigParams.RANDOM_DIRECTION.value:         False,
     ctrl_const.ConfigParams.ROUND_ROBIN_ADVANCE_DIST.value: 0.05,
     ctrl_const.ConfigParams.START_POSITION_OFFSET.value:    0.0,
     ctrl_const.ConfigParams.DONE_CONDITION.value:           any,
@@ -137,11 +139,16 @@ def _build_agent(
     config: Optional[Dict[str, Any]],
     is_training: bool,
     extra_ctrl_config: Optional[Dict[str, Any]] = None,
+    racecar_name: str = 'racecar',
 ):
     '''Build a default :class:`~deepracer_env.agents.agent.Agent` from its component parts.
 
     This is the wiring that happens inside ROS/Gazebo — hidden from the user
-    unless they need to customise it.
+    unless they need to customise it. ``racecar_name`` selects the Gazebo model /
+    ROS namespace — pass ``racecar_0`` .. ``racecar_{N-1}`` to build the agents for
+    a multi-car world (one ``Agent`` per car); the sensor subscribes to that car's
+    namespaced topics and the controller commands that car (see
+    ``MultiAgentDeepRacerEnv``).
     '''
     # Initialise the ROS node if one hasn't been started yet.
     import rospy
@@ -155,9 +162,7 @@ def _build_agent(
     from deepracer_env.sensors.sensors_rollout import SensorFactory
     from deepracer_env.agent_ctrl.rollout_agent_ctrl import RolloutCtrl
 
-    racecar_name = 'racecar'
-
-    # Build composite sensor
+    # Build composite sensor (subscribes to <racecar_name>/... topics)
     composite_sensor = CompositeSensor()
     for sensor_type in sensors:
         composite_sensor.add_sensor(
@@ -165,8 +170,9 @@ def _build_agent(
         )
 
     # Merge user overrides into the default config. Order matters:
-    #   defaults < env-level (object_avoidance, etc.) < user `config` overrides
+    #   defaults < agent name < env-level (object_avoidance, etc.) < user `config`
     ctrl_config = {**_DEFAULT_CTRL_CONFIG}
+    ctrl_config[ctrl_const.ConfigParams.AGENT_NAME.value] = racecar_name
     ctrl_config[ctrl_const.ConfigParams.REWARD.value] = reward_fn
     if extra_ctrl_config:
         ctrl_config.update(extra_ctrl_config)
@@ -175,6 +181,13 @@ def _build_agent(
 
     ctrl = RolloutCtrl(ctrl_config, metrics=_NoopMetrics(), is_training=is_training)
     return Agent(composite_sensor, ctrl)
+
+
+def build_agent(racecar_name, reward_fn, sensors, config=None, is_training=True,
+                extra_ctrl_config=None):
+    '''Public per-car agent builder for multi-car worlds — see ``_build_agent``.'''
+    return _build_agent(reward_fn, sensors, config, is_training,
+                        extra_ctrl_config=extra_ctrl_config, racecar_name=racecar_name)
 
 
 class DeepRacerEnv(gymnasium.Env):

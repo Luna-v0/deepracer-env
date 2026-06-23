@@ -10,6 +10,9 @@
 
   <!-- sensor configuration -->
   <xacro:arg name="include_second_camera" default="false" />
+  <!-- include_camera=false drops the primary camera sensor/render (camera-off /
+       feature-obs path); see racecar.gazebo and docs/reports/multi-car.md. -->
+  <xacro:arg name="include_camera" default="true" />
   <xacro:arg name="include_lidar_sensor" default="false" />
 
   <!-- lidar 360 degree - settings -->

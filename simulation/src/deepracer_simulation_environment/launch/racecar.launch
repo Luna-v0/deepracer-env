@@ -10,6 +10,7 @@
   <arg name="make_required" default="true" />
 
   <arg name="include_second_camera" default="false" />
+  <arg name="include_camera" default="true" /><!-- false = camera-off / feature-obs path -->
   <arg name="include_lidar_sensor" default="false" />
 
   <!-- Lidar 360 degree - settings -->
@@ -30,6 +31,7 @@
       racecar_name:=$(arg racecar_name)
       racecar_bitmask:=$(arg racecar_bitmask)
       include_second_camera:=$(arg include_second_camera)
+      include_camera:=$(arg include_camera)
       include_lidar_sensor:=$(arg include_lidar_sensor)
 
       lidar_360_degree_sample:=$(arg lidar_360_degree_sample)

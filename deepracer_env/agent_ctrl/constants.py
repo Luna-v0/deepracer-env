@@ -83,6 +83,13 @@ class ConfigParams(Enum):
     MODEL_METADATA = 'model_metadata'
     CHANGE_START = 'change_start'
     ALT_DIR = 'alternate_dir'
+    # Domain-randomization reset modes (dr-gym W-dr). When set they take
+    # precedence over the deterministic CHANGE_START round-robin / ALT_DIR
+    # alternation: each training episode samples a *random* valid start position
+    # (uniform normalized distance along the centerline) and/or a *random*
+    # direction, instead of advancing/alternating deterministically.
+    RANDOM_START = 'random_start'
+    RANDOM_DIRECTION = 'random_direction'
     VERSION = 'version'
     CAR_CTRL_CONFIG = 'car_ctrl_config'
     NUMBER_OF_RESETS = 'number_of_resets'
