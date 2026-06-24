@@ -613,6 +613,13 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
                                  current_car_pose.orientation.y,
                                  current_car_pose.orientation.z,
                                  current_car_pose.orientation.w])
+            # On the first step after a reset the model-state pose can be read before
+            # Gazebo has published a valid orientation (zero-norm quaternion). The
+            # camera sensor's blocking get_state used to absorb this delay; the
+            # camera-free (feature-obs) multi-car path doesn't, so guard it — the real
+            # pose lands on the next step. Avoids scipy "zero norm quaternions".
+            if not np.any(rotation):
+                rotation = np.array([0.0, 0.0, 0.0, 1.0])
             model_point = Point(get_relative_pos(origin, translation, rotation))
             pos_dict = {AgentPos.ORIENTATION.value: rotation,
                         AgentPos.LINK_POINTS.value: link_points,
