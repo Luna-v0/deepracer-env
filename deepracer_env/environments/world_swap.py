@@ -277,15 +277,20 @@ class WorldSwapper(object):
         or collide with each other. The TrackData for that car is shifted by the
         same offset (``TrackData.create(world_name, offset)``).'''
         self._ensure_services()
+        # The offset MUST go inside the <include>'s <pose> — the include carries
+        # the track's own (origin) pose, which overrides the spawn service's
+        # initial_pose, so passing the offset there alone leaves the mesh at 0,0.
+        ox, oy = float(offset[0]), float(offset[1])
         sdf = (
             '<?xml version="1.0"?>\n<sdf version="1.6">\n'
             '  <include>\n'
             '    <uri>model://models/{}</uri>\n'
             '    <name>{}</name>\n'
-            '  </include>\n</sdf>\n'.format(world_name, model_name))
+            '    <pose>{} {} 0 0 0 0</pose>\n'
+            '  </include>\n</sdf>\n'.format(world_name, model_name, ox, oy))
         pose = Pose()
-        pose.position.x = float(offset[0])
-        pose.position.y = float(offset[1])
+        pose.position.x = ox
+        pose.position.y = oy
         try:
             resp = self._spawn_srv(model_name, sdf, '', pose, '')
         except Exception as ex:  # noqa: BLE001
