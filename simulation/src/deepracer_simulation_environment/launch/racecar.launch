@@ -11,6 +11,7 @@
 
   <arg name="include_second_camera" default="false" />
   <arg name="include_camera" default="true" /><!-- false = camera-off / feature-obs path -->
+  <arg name="friction_mu" default="1.5" /><!-- wheel mu; per-spawn friction DR -->
   <arg name="include_lidar_sensor" default="false" />
 
   <!-- Lidar 360 degree - settings -->
@@ -32,6 +33,7 @@
       racecar_bitmask:=$(arg racecar_bitmask)
       include_second_camera:=$(arg include_second_camera)
       include_camera:=$(arg include_camera)
+      friction_mu:=$(arg friction_mu)
       include_lidar_sensor:=$(arg include_lidar_sensor)
 
       lidar_360_degree_sample:=$(arg lidar_360_degree_sample)

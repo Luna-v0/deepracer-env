@@ -22,5 +22,6 @@
     <arg name="publish_to_kinesis_stream"    value="false" />
     <arg name="gui"                          value="$(optenv ENABLE_GUI false)" />
     <arg name="racecars_with_cameras"        value="$(optenv GYM_DR_CAMERAS racecar,racecar_0,racecar_1,racecar_2,racecar_3,racecar_4,racecar_5,racecar_6,racecar_7)" />
+    <arg name="friction_mu"                  value="$(optenv GYM_DR_FRICTION_MU 1.5)" />
   </include>
 </launch>

@@ -13,6 +13,10 @@
   <!-- include_camera=false drops the primary camera sensor/render (camera-off /
        feature-obs path); see racecar.gazebo and docs/reports/multi-car.md. -->
   <xacro:arg name="include_camera" default="true" />
+  <!-- friction_mu: wheel ODE surface mu (mu1/mu2), per-spawn friction DR. Default
+       1.5 (baseline grip). dr-gym samples it from the DR `friction` Range and passes
+       GYM_DR_FRICTION_MU so each run/worker spawns at a different friction. -->
+  <xacro:arg name="friction_mu" default="1.5" />
   <xacro:arg name="include_lidar_sensor" default="false" />
 
   <!-- lidar 360 degree - settings -->
