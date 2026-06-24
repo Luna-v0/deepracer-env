@@ -63,6 +63,7 @@ strings (e.g. ``"CAMERA"``, ``"LIDAR"``).
 Each value is a ``Box`` matching the sensor's output shape.
 '''
 import logging
+import os
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -105,7 +106,13 @@ _DEFAULT_CTRL_CONFIG: Dict[str, Any] = {
     ctrl_const.ConfigParams.ACTION_SPACE.value:             DEFAULT_ACTION_SPACE,
     ctrl_const.ConfigParams.VERSION.value:                  SIMAPP_VERSION_5,
     ctrl_const.ConfigParams.IS_CONTINUOUS.value:            True,
-    ctrl_const.ConfigParams.NUMBER_OF_RESETS.value:         5,
+    # Off-track is immediately terminal (done=True on first off-track) instead of
+    # the DeepRacer recover-and-continue: number_of_resets>0 teleports the car back
+    # and keeps the SAME episode going up to N times, which let an off-track/drifting
+    # car flail ~19s before reset (see _check_for_phase_change). 0 gives the policy a
+    # clean, immediate failure signal and matches the single-agent path. Override via
+    # GYM_DR_NUMBER_OF_RESETS if recover-and-continue is wanted for sample efficiency.
+    ctrl_const.ConfigParams.NUMBER_OF_RESETS.value:         int(os.getenv('GYM_DR_NUMBER_OF_RESETS', '0')),
     ctrl_const.ConfigParams.PENALTY_SECONDS.value:          2.0,
     ctrl_const.ConfigParams.NUMBER_OF_TRIALS.value:         1000,
     ctrl_const.ConfigParams.RACE_TYPE.value:                'TIME_TRIAL',
