@@ -288,6 +288,10 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         # and GetModelstateTracker to reflect the latest agent position right away when start.
         SetModelStateTracker.get_instance().set_model_state(start_model_state, blocking=True)
         GetModelStateTracker.get_instance().get_model_state(self._agent_name_, '', blocking=True)
+        # Seed prev_car_pose with the (valid) start pose so an off-track reset on
+        # the FIRST step uses a real Pose, not the init 0.0 float. Single-car
+        # spawns on-track so it never hit this; a multi-car off-its-track car does.
+        self._data_dict_['prev_car_pose'] = start_model_state.pose
         # reset view cameras
         self.camera_manager.reset(car_pose=start_model_state.pose,
                                   namespace=self._agent_name_)
