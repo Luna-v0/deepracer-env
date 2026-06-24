@@ -174,6 +174,17 @@ def _build_agent(
     ctrl_config = {**_DEFAULT_CTRL_CONFIG}
     ctrl_config[ctrl_const.ConfigParams.AGENT_NAME.value] = racecar_name
     ctrl_config[ctrl_const.ConfigParams.REWARD.value] = reward_fn
+    # The default control / link topics are hardcoded to the single-car '/racecar/'
+    # namespace. For a multi-car world re-namespace them to this car (racecar_i)
+    # so its throttle/steering reach ITS wheels (else both cars publish to the
+    # nonexistent /racecar/ topics, sit immobilized, and reset forever).
+    if racecar_name != 'racecar':
+        ctrl_config[ctrl_const.ConfigParams.VELOCITY_LIST.value] = [
+            t.replace('/racecar/', '/{}/'.format(racecar_name)) for t in VELOCITY_TOPICS]
+        ctrl_config[ctrl_const.ConfigParams.STEERING_LIST.value] = [
+            t.replace('/racecar/', '/{}/'.format(racecar_name)) for t in STEERING_TOPICS]
+        ctrl_config[ctrl_const.ConfigParams.LINK_NAME_LIST.value] = [
+            l.replace('racecar::', '{}::'.format(racecar_name)) for l in LINK_NAMES]
     if extra_ctrl_config:
         ctrl_config.update(extra_ctrl_config)
     if config:
