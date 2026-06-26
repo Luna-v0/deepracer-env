@@ -16,6 +16,7 @@
 
 '''This module implements concrete agent controllers for the rollout worker'''
 import copy
+import os
 from collections import OrderedDict
 import math
 import numpy as np
@@ -51,6 +52,7 @@ from deepracer_env.gazebo_tracker.trackers.set_model_state_tracker import SetMod
 from deepracer_env.gazebo_tracker.abs_tracker import AbstractTracker
 from deepracer_env.gazebo_tracker.constants import TrackerPriority
 from deepracer_env.boto.s3.constants import ModelMetadataKeys
+from deepracer_env.domain_randomizations.visual_randomizer import VisualRandomizer
 
 
 LOG = Logger(__name__, logging.INFO).get_logger()
@@ -137,6 +139,29 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         # the same config replay the same start/direction schedule.
         self._dr_reset_rng_ = np.random.default_rng(
             int(config_dict.get(const.ConfigParams.START_POSITION_OFFSET.value, 0.0) * 1e6) or None)
+        # Per-episode visual domain randomization (sim2real), gated behind
+        # GYM_DR_VISUAL_DR (default off so existing runs are unaffected) -- mirrors
+        # how friction/random_start are env-gated. When enabled, the track model's
+        # visuals are recolored once per episode reset (see reset_agent below).
+        # Only the primary agent ('racecar', agent_idx None) drives the recolor;
+        # the track visuals are world-shared, so doing it once avoids redundant
+        # service calls in multi-car worlds.
+        # NOTE: utils.str2bool only maps the literals 'true'/'false'; it passes
+        # any other string (incl. '0') through unchanged -> truthy. So parse the
+        # gate explicitly: enabled only for '1'/'true' (default OFF).
+        self._visual_randomizer_ = None
+        _visual_dr_gate = os.environ.get("GYM_DR_VISUAL_DR", "0").strip().lower()
+        if _visual_dr_gate in ("1", "true") and self._agent_idx_ is None:
+            # Independent RNG so visual colors don't perturb the start/direction
+            # schedule. Seeded from GYM_DR_VISUAL_DR_SEED if present, else nondet.
+            visual_seed_env = os.environ.get("GYM_DR_VISUAL_DR_SEED")
+            visual_seed = int(visual_seed_env) if visual_seed_env not in (None, "") else None
+            self._visual_dr_rng_ = np.random.default_rng(visual_seed)
+            try:
+                self._visual_randomizer_ = VisualRandomizer()
+            except Exception as ex:  # noqa: BLE001 - never break reset on DR setup
+                LOG.warning("Visual DR setup failed, disabling visual DR: %s", ex)
+                self._visual_randomizer_ = None
         # Dictionary to track the previous way points
         self._prev_waypoints_ = {'prev_point' : Point(0, 0), 'prev_point_2' : Point(0, 0)}
 
@@ -277,6 +302,14 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         '''
         LOG.info(f"Reset agent (count: {self._reset_count})")
         self._clear_data()
+        # Per-episode visual DR (gated by GYM_DR_VISUAL_DR): recolor the track
+        # model's visuals once per reset so a camera policy sees varied
+        # appearances. Wrapped so a recolor failure can never break the reset.
+        if self._visual_randomizer_ is not None:
+            try:
+                self._visual_randomizer_.randomize(self._visual_dr_rng_)
+            except Exception as ex:  # noqa: BLE001
+                LOG.warning("Visual DR randomize failed (continuing reset): %s", ex)
         self._metrics.reset()
         send_action(self._velocity_pub_dict_, self._steering_pub_dict_, 0.0, 0.0)
         start_model_state = self._get_car_start_model_state()
