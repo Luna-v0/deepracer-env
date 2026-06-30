@@ -112,11 +112,15 @@ def generate_launch_description() -> LaunchDescription:
         arguments=["-topic", "robot_description", "-name", car_name, "-z", "0.06"],
     )
 
-    # 4. ros_gz bridge: clock (gz->ros) + per-car sensors + pose snapshot.
+    # 4. ros_gz bridge: clock (gz->ros) + per-car sensors + continuous entity
+    #    poses. Bridging dynamic_pose/info lets the SimControl seam read poses
+    #    from a live ROS subscription instead of forking a `gz topic` snapshot per
+    #    step (that subprocess was ~77% of feature-obs training wall time).
     bridge = Node(
         package="ros_gz_bridge", executable="parameter_bridge", output="screen",
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
+            ["/world/", world, "/dynamic_pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V"],
             [car_name, "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan"],
         ],
     )

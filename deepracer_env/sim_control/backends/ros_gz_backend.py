@@ -97,6 +97,14 @@ class RosGzBackend(SimControl):
         # so twist can be finite-differenced (gz pose/info carries no velocity).
         self._pose_cache: Dict[str, Tuple[Pose, float]] = {}
         self._prev_pose_cache: Dict[str, Tuple[Pose, float]] = {}
+        # Fast pose path: subscribe to the bridged `dynamic_pose/info` ROS topic
+        # (continuous) instead of forking a `gz topic` subprocess per refresh —
+        # the gz CLI snapshot was ~77% of training wall time on the feature/pose
+        # path. Populated by a background callback; refresh_state reads the latest.
+        # Falls back to the gz CLI when the bridge/topic isn't up.
+        self._sub_cache: Dict[str, Tuple[Pose, float]] = {}
+        self._pose_sub = None
+        self._pose_sub_tried = False
 
     # -- capabilities ----------------------------------------------------------
 
@@ -201,15 +209,62 @@ class RosGzBackend(SimControl):
 
     # -- state read / write ----------------------------------------------------
 
-    def refresh_state(self, force: bool = False) -> None:
-        """Take one batched ``pose/info`` snapshot into the cache.
+    def _ensure_pose_sub(self) -> None:
+        """Lazily subscribe to the bridged ``dynamic_pose/info`` ROS topic.
 
-        Called from the sim-clock callback (and forced by blocking reads). A
-        snapshot is a ``gz topic`` subprocess, so non-forced calls are coalesced
-        to ``refresh_min_interval_s`` to avoid a per-tick subprocess storm. The
-        previous snapshot is retained so :meth:`get_entity_state` can
-        finite-difference a velocity (gz ``pose/info`` carries pose only).
+        The launch bridges gz ``/world/<world>/dynamic_pose/info`` (gz.msgs.Pose_V)
+        to a ROS ``tf2_msgs/TFMessage``; a background callback caches each entity's
+        latest pose so :meth:`refresh_state` is subprocess-free. No-op (and the gz
+        CLI fallback stays in effect) if rclpy / the shared node / the topic isn't
+        available — e.g. host-side tests with no live bridge.
         """
+        if self._pose_sub_tried:
+            return
+        self._pose_sub_tried = True
+        try:
+            from rclpy.qos import qos_profile_sensor_data
+            from tf2_msgs.msg import TFMessage
+
+            from deepracer_env.runtime import get_node
+
+            node = get_node()
+            topic = "{}/dynamic_pose/info".format(self._prefix)
+            self._pose_sub = node.create_subscription(
+                TFMessage, topic, self._on_pose_tf, qos_profile_sensor_data)
+            LOG.info("RosGzBackend: subscribed to bridged pose topic %s", topic)
+        except Exception as ex:  # noqa: BLE001
+            LOG.warning("RosGzBackend: pose subscription unavailable (%s); "
+                        "falling back to gz CLI pose snapshots", ex)
+            self._pose_sub = None
+
+    def _on_pose_tf(self, msg) -> None:
+        """Cache the latest pose of every entity from a bridged TFMessage."""
+        now = time.monotonic()
+        cache = dict(self._sub_cache)  # copy-on-write so refresh_state reads atomically
+        for tf in msg.transforms:
+            t = tf.transform.translation
+            r = tf.transform.rotation
+            pose = Pose(position=Vec3(t.x, t.y, t.z),
+                        orientation=Quaternion(r.x, r.y, r.z, r.w))
+            cache[tf.child_frame_id] = (pose, now)
+        self._sub_cache = cache
+
+    def refresh_state(self, force: bool = False) -> None:
+        """Refresh the entity pose cache.
+
+        Fast path: copy the latest poses from the bridged ``dynamic_pose/info``
+        subscription (no subprocess). The previous snapshot is retained so
+        :meth:`get_entity_state` can finite-difference a velocity. Falls back to a
+        throttled ``gz topic`` snapshot when the subscription has no data yet.
+        """
+        self._ensure_pose_sub()
+        if self._pose_sub is not None and self._sub_cache:
+            snapshot = self._sub_cache  # atomic ref (callback rebinds, never mutates)
+            if snapshot is not self._pose_cache:
+                self._prev_pose_cache = self._pose_cache
+                self._pose_cache = snapshot
+            return
+
         now = time.monotonic()
         if not force and (now - self._last_refresh_t) < self._refresh_min_interval_s:
             return
