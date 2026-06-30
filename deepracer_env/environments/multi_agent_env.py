@@ -128,6 +128,9 @@ class MultiAgentDeepRacerEnv:
             # Full params so the dr-gym VecEnv can build feature observations
             # (camera-off path) per car without a separate reward tap.
             info["reward_params"] = dict(rp)
+        # Per-arena applied-DR labels (dr_* keys) for the camera->feature dataset.
+        if ctrl is not None and hasattr(ctrl, "dr_info"):
+            info.update(ctrl.dr_info)
         return info
 
     def close(self) -> None:

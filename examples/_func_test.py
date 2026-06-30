@@ -30,6 +30,10 @@ obs, info = env.reset()
 signal.alarm(0)
 print("RESET ok; obs keys:", list(obs.keys()),
       "info:", {k: info[k] for k in list(info)[:4]}, flush=True)
+dr_keys = {k: info[k] for k in info if k.startswith("dr_")}
+print("DR labels in info:", {k: dr_keys[k] for k in
+      ("dr_start_ndist", "dr_reverse_dir", "dr_steering_bias_rad", "dr_track_color")
+      if k in dr_keys}, flush=True)
 
 samples = []
 for i in range(12):

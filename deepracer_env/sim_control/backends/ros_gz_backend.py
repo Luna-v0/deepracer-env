@@ -104,6 +104,7 @@ class RosGzBackend(SimControl):
         return capability in (
             Capability.DETERMINISTIC_STEP,
             Capability.VISUAL_RECOLOR,
+            Capability.LIGHTING,
         )
 
     # -- gz CLI plumbing -------------------------------------------------------
@@ -297,6 +298,22 @@ class RosGzBackend(SimControl):
                  ar=amb.r, ag=amb.g, ab=amb.b, aa=amb.a,
                  dr=diffuse.r, dg=diffuse.g, db=diffuse.b, da=diffuse.a)
         out = self._service("visual_config", "gz.msgs.Visual", "gz.msgs.Boolean", req)
+        return self._ok(out)
+
+    def set_light(self, name, *, diffuse=None, specular=None, direction=None, blocking=True):  # noqa: D102
+        # gz-sim's native /world/<w>/light_config takes a gz.msgs.Light. Only the
+        # fields we set are sent; gz keeps the rest. Used for lighting DR.
+        parts = ['name: "{}"'.format(name)]
+        if diffuse is not None:
+            parts.append("diffuse {{r: {} g: {} b: {} a: {}}}".format(
+                diffuse.r, diffuse.g, diffuse.b, diffuse.a))
+        if specular is not None:
+            parts.append("specular {{r: {} g: {} b: {} a: {}}}".format(
+                specular.r, specular.g, specular.b, specular.a))
+        if direction is not None:
+            dx, dy, dz = direction
+            parts.append("direction {{x: {} y: {} z: {}}}".format(dx, dy, dz))
+        out = self._service("light_config", "gz.msgs.Light", "gz.msgs.Boolean", " ".join(parts))
         return self._ok(out)
 
     # -- parsing ---------------------------------------------------------------

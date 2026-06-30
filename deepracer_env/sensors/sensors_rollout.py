@@ -23,6 +23,7 @@ whose single key is the sensor\\'s ``Input.value`` string, ready to be merged
 by :class:`~markov.sensors.composite_sensor.CompositeSensor`.
 '''
 import logging
+import os
 import numpy as np
 from sensor_msgs.msg import Image as sensor_image
 from sensor_msgs.msg import LaserScan
@@ -33,7 +34,11 @@ from PIL import Image
 from deepracer_env.runtime import get_node
 from deepracer_env.sensors.utils import get_observation_space
 from deepracer_env.sensors.sensor_interface import SensorInterface, LidarInterface
-from deepracer_env.sensors.constants import Input
+from deepracer_env.sensors.constants import (
+    Input,
+    LIDAR_360_DEGREE_MIN_RANGE,
+    LIDAR_360_DEGREE_MAX_RANGE,
+)
 from deepracer_env.environments.constants import TRAINING_IMAGE_SIZE
 from deepracer_env.log_handler.deepracer_exceptions import GenericRolloutException, GenericError
 from deepracer_env import utils
@@ -42,6 +47,66 @@ from deepracer_env.log_handler.constants import SIMAPP_SIMULATION_WORKER_EXCEPTI
 
 
 LOGGER = Logger(__name__, logging.INFO).get_logger()
+
+
+# ---------------------------------------------------------------------------
+# Optional domain-randomisation observation noise (OFF by default).
+#
+# Zero-mean Gaussian noise can be injected at ``get_state()`` time to widen the
+# sim-to-real gap during training.  Both knobs default to 0.0, in which case the
+# noise path is a strict no-op: no RNG is drawn and the original array object is
+# returned untouched, so behaviour is byte-identical to the noise-free code.
+#
+#   * ``GYM_DR_CAMERA_NOISE_STD`` — std expressed as a *fraction* of the full
+#     8-bit scale; the per-pixel std actually applied is ``std * 255`` before
+#     the result is clipped back to uint8 ``[0, 255]``.
+#   * ``GYM_DR_LIDAR_NOISE_STD``  — std in metres applied to the raw range
+#     readings before clipping to the sensor's ``[min, max]`` range.
+# ---------------------------------------------------------------------------
+
+def _read_noise_std(env_var):
+    '''Read a non-negative Gaussian-noise std from *env_var* (default 0.0).
+
+    Any unparsable or negative value is treated as 0.0 (noise disabled).
+    '''
+    try:
+        std = float(os.environ.get(env_var, 0.0))
+    except (TypeError, ValueError):
+        LOGGER.warning("Invalid %s value; disabling sensor noise.", env_var)
+        return 0.0
+    return std if std > 0.0 else 0.0
+
+
+CAMERA_NOISE_STD = _read_noise_std("GYM_DR_CAMERA_NOISE_STD")
+LIDAR_NOISE_STD = _read_noise_std("GYM_DR_LIDAR_NOISE_STD")
+
+
+def _apply_camera_noise(image_array):
+    '''Return *image_array* with optional Gaussian DR noise (uint8, ``[0, 255]``).
+
+    No-op (returns the input unchanged) when ``GYM_DR_CAMERA_NOISE_STD <= 0``.
+    '''
+    if CAMERA_NOISE_STD <= 0.0:
+        return image_array
+    noisy = image_array.astype(np.float32) + np.random.normal(
+        0.0, CAMERA_NOISE_STD * 255.0, size=image_array.shape)
+    return np.clip(noisy, 0, 255).astype(np.uint8)
+
+
+def _apply_lidar_noise(ranges, low, high):
+    '''Return *ranges* with optional Gaussian DR noise clipped to ``[low, high]``.
+
+    A fresh array is always returned (the input/buffered array is never mutated),
+    which preserves the ``DoubleBuffer(clear_data_on_get=False)`` semantics where
+    the same raw scan may be read repeatedly.  No-op (returns the input
+    unchanged) when ``GYM_DR_LIDAR_NOISE_STD <= 0``.
+    '''
+    if LIDAR_NOISE_STD <= 0.0:
+        return ranges
+    arr = np.asarray(ranges)
+    noisy = arr + np.random.normal(0.0, LIDAR_NOISE_STD, size=arr.shape)
+    return np.clip(noisy, low, high).astype(arr.dtype)
+
 
 class SensorFactory(object):
     '''This class implements a sensot factory and is used to create sensors per
@@ -108,7 +173,7 @@ class Camera(SensorInterface):
                                     image_data.data, 'raw', 'RGB', 0, 1)
             image = image.resize(TRAINING_IMAGE_SIZE, resample=2)
             self.raw_data = image_data
-            return {Input.CAMERA.value: np.array(image)}
+            return {Input.CAMERA.value: _apply_camera_noise(np.array(image))}
         except utils.DoubleBuffer.Empty:
             return {}
         except Exception as ex:
@@ -163,7 +228,7 @@ class Observation(SensorInterface):
                                     image_data.data, 'raw', 'RGB', 0, 1)
             image = image.resize(TRAINING_IMAGE_SIZE, resample=2)
             self.raw_data = image_data
-            return {Input.OBSERVATION.value: np.array(image)}
+            return {Input.OBSERVATION.value: _apply_camera_noise(np.array(image))}
         except utils.DoubleBuffer.Empty:
             return {}
         except Exception as ex:
@@ -221,7 +286,7 @@ class LeftCamera(SensorInterface):
                                     image_data.data, 'raw', 'RGB', 0, 1)
             image = image.resize(TRAINING_IMAGE_SIZE, resample=2)
             self.raw_data = image_data
-            return {Input.LEFT_CAMERA.value: np.array(image)}
+            return {Input.LEFT_CAMERA.value: _apply_camera_noise(np.array(image))}
         except utils.DoubleBuffer.Empty:
             return {}
         except Exception as ex:
@@ -284,7 +349,7 @@ class DualCamera(SensorInterface):
                                         image_data.data, 'raw', 'RGB', 0, 1)
             right_img = right_img.resize(TRAINING_IMAGE_SIZE, resample=2).convert('L')
 
-            return {Input.STEREO.value: np.array(np.stack((left_img, right_img), axis=2))}
+            return {Input.STEREO.value: _apply_camera_noise(np.array(np.stack((left_img, right_img), axis=2)))}
         except utils.DoubleBuffer.Empty:
             return {}
         except Exception as ex:
@@ -340,7 +405,9 @@ class Lidar(LidarInterface):
 
     def get_state(self, block=True):
         try:
-            return {self.sensor_type: self.data_buffer.get(block=block, timeout=self.timeout)}
+            return {self.sensor_type: _apply_lidar_noise(
+                self.data_buffer.get(block=block, timeout=self.timeout),
+                LIDAR_360_DEGREE_MIN_RANGE, LIDAR_360_DEGREE_MAX_RANGE)}
         except utils.DoubleBuffer.Empty:
             # For Lidar, we always call non-blocking get_state instead of
             # block-waiting for new state, and the expectation is
@@ -351,7 +418,9 @@ class Lidar(LidarInterface):
             # Empty, in such case, this may cause issue for the inference due to
             # incompatible input to NN. Thus, we should get sensor data with blocking if
             # DoubleBuffer.Empty is raised.
-            return {self.sensor_type: self.data_buffer.get(block=True, timeout=self.timeout)}
+            return {self.sensor_type: _apply_lidar_noise(
+                self.data_buffer.get(block=True, timeout=self.timeout),
+                LIDAR_360_DEGREE_MIN_RANGE, LIDAR_360_DEGREE_MAX_RANGE)}
         except Exception as ex:
             raise GenericRolloutException("Unable to set state: {}".format(ex))
 
@@ -392,7 +461,9 @@ class SectorLidar(LidarInterface):
 
     def get_state(self, block=True):
         try:
-            return {self.sensor_type: self.data_buffer.get(block=block, timeout=self.timeout)}
+            return {self.sensor_type: _apply_lidar_noise(
+                self.data_buffer.get(block=block, timeout=self.timeout),
+                LIDAR_360_DEGREE_MIN_RANGE, LIDAR_360_DEGREE_MAX_RANGE)}
         except utils.DoubleBuffer.Empty:
             # For Lidar, we always call non-blocking get_state instead of
             # block-waiting for new state, and the expectation is
@@ -403,7 +474,9 @@ class SectorLidar(LidarInterface):
             # Empty, in such case, this may cause issue for the inference due to
             # incompatible input to NN. Thus, we should get sensor data with blocking if
             # DoubleBuffer.Empty is raised.
-            return {self.sensor_type: self.data_buffer.get(block=True, timeout=self.timeout)}
+            return {self.sensor_type: _apply_lidar_noise(
+                self.data_buffer.get(block=True, timeout=self.timeout),
+                LIDAR_360_DEGREE_MIN_RANGE, LIDAR_360_DEGREE_MAX_RANGE)}
         except Exception as ex:
             raise GenericRolloutException("Unable to set state: {}".format(ex))
 
@@ -444,7 +517,9 @@ class DiscretizedSectorLidar(LidarInterface):
 
     def get_state(self, block=True):
         try:
-            return {self.sensor_type: self.data_buffer.get(block=block, timeout=self.timeout)}
+            return {self.sensor_type: _apply_lidar_noise(
+                self.data_buffer.get(block=block, timeout=self.timeout),
+                LIDAR_360_DEGREE_MIN_RANGE, LIDAR_360_DEGREE_MAX_RANGE)}
         except utils.DoubleBuffer.Empty:
             # For Lidar, we always call non-blocking get_state instead of
             # block-waiting for new state, and the expectation is
@@ -455,7 +530,9 @@ class DiscretizedSectorLidar(LidarInterface):
             # Empty, in such case, this may cause issue for the inference due to
             # incompatible input to NN. Thus, we should get sensor data with blocking if
             # DoubleBuffer.Empty is raised.
-            return {self.sensor_type: self.data_buffer.get(block=True, timeout=self.timeout)}
+            return {self.sensor_type: _apply_lidar_noise(
+                self.data_buffer.get(block=True, timeout=self.timeout),
+                LIDAR_360_DEGREE_MIN_RANGE, LIDAR_360_DEGREE_MAX_RANGE)}
         except Exception as ex:
             raise GenericRolloutException("Unable to set state: {}".format(ex))
 

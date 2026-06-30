@@ -284,3 +284,30 @@ dataset.
 - [Tiled multi-arena](multi-arena.md) — how arenas tile, seed, and stay decoupled
 - [World conversion](world-conversion.md) — how the 5 system plugins + lights land in each `.sdf`
 - [Drive control](drive-control.md) — the action→joint mapping the action-layer DR sits in front of
+
+## Implementation (consolidated per-arena randomizer)
+
+The catalog is implemented as one per-arena randomizer:
+
+* [`domain_randomizations/spec.py`](../../deepracer_env/domain_randomizations/spec.py)
+  — `RandomizationSpec` (every knob + range; `from_env()` reads `GYM_DR_*`, all
+  default off).
+* [`domain_randomizations/domain_randomizer.py`](../../deepracer_env/domain_randomizations/domain_randomizer.py)
+  — `DomainRandomizer(spec, rng)`: `sample()` returns one `EpisodeRandomization`
+  bundle; `apply_sim()` applies the simulator-side knobs (visual recolour +
+  lighting) through the `SimControl` seam (native gz `visual_config` /
+  `light_config` — no plugin).
+
+`RolloutCtrl` owns one randomizer **per car**, seeded by the car's index and
+scoped to that car's own track entity (`racetrack_i`), so arenas randomise
+independently. Per reset it samples, applies recolour/lighting, sets the random
+start position / direction, and stores the steering-bias / motor-delay / sensor-
+noise levels (applied in `send_action` and the sensor layer). The applied bundle
+is surfaced in the observation `info` under `dr_*` keys — the supervision labels
+for the future camera→feature-vector model.
+
+**Verified** in a gz Jetty container with the full catalog enabled: the random
+start relocated the car along the track, and every `dr_*` label appeared in the
+step `info`. (Per-episode *friction application* is sampled + surfaced but not
+yet pushed to gz at runtime — it needs the `wheel_slip` service; per-spawn
+friction via the URDF arg is the active mechanism.)

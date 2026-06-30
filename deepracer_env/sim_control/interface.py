@@ -93,6 +93,9 @@ class Capability:
     VISUAL_RECOLOR = "visual_recolor"
     """Backend can set per-visual material colour / transparency at runtime."""
 
+    LIGHTING = "lighting"
+    """Backend can recolour / re-aim scene lights at runtime (lighting DR)."""
+
     LINK_STATE = "link_state"
     """Backend can read the pose/twist of an individual link, not just a model."""
 
@@ -328,6 +331,33 @@ class SimControl(abc.ABC):
         raises :class:`CapabilityNotSupported`.
         """
         raise CapabilityNotSupported("visual transparency is not supported by this backend")
+
+    def set_light(
+        self,
+        name: str,
+        *,
+        diffuse: Optional[ColorRGBA] = None,
+        specular: Optional[ColorRGBA] = None,
+        direction: Optional["tuple"] = None,
+        blocking: bool = True,
+    ) -> bool:
+        """Recolour / re-aim a named scene light (lighting domain randomisation).
+
+        Optional (advertise :attr:`Capability.LIGHTING`). On the ``ros_gz``
+        backend this is gz-sim's native ``/world/<w>/light_config`` — no custom
+        plugin. The default raises :class:`CapabilityNotSupported`.
+
+        Args:
+            name: Light name (e.g. ``"sun"`` in the converted worlds).
+            diffuse: New diffuse colour, if given.
+            specular: New specular colour, if given.
+            direction: New ``(x, y, z)`` direction for a directional light.
+            blocking: Wait for the change to apply before returning.
+
+        Returns:
+            ``True`` on success.
+        """
+        raise CapabilityNotSupported("lighting is not supported by this backend")
 
     # -- lifecycle -------------------------------------------------------------
 

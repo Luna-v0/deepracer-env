@@ -27,7 +27,9 @@ from std_msgs.msg import Float64MultiArray
 from shapely.geometry import Point
 
 from deepracer_env.sim_control.compat import ModelState
-from deepracer_env.runtime import get_node
+from deepracer_env.runtime import get_node, get_sim_control
+from deepracer_env.domain_randomizations.spec import RandomizationSpec
+from deepracer_env.domain_randomizations.domain_randomizer import DomainRandomizer
 
 from deepracer_env import utils
 import deepracer_env.agent_ctrl.constants as const
@@ -145,32 +147,26 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         # the same config replay the same start/direction schedule.
         self._dr_reset_rng_ = np.random.default_rng(
             int(config_dict.get(const.ConfigParams.START_POSITION_OFFSET.value, 0.0) * 1e6) or None)
-        # Per-episode visual domain randomization (sim2real), gated behind
-        # GYM_DR_VISUAL_DR (default off so existing runs are unaffected) -- mirrors
-        # how friction/random_start are env-gated. When enabled, the track model's
-        # visuals are recolored once per episode reset (see reset_agent below).
-        # Only the primary agent ('racecar', agent_idx None) drives the recolor;
-        # the track visuals are world-shared, so doing it once avoids redundant
-        # service calls in multi-car worlds.
-        # NOTE: utils.str2bool only maps the literals 'true'/'false'; it passes
-        # any other string (incl. '0') through unchanged -> truthy. So parse the
-        # gate explicitly: enabled only for '1'/'true' (default OFF).
-        self._visual_randomizer_ = None
-        _visual_dr_gate = os.environ.get("GYM_DR_VISUAL_DR", "0").strip().lower()
-        if _visual_dr_gate in ("1", "true") and self._agent_idx_ is None:
-            # Independent RNG so visual colors don't perturb the start/direction
-            # schedule. Seeded from GYM_DR_VISUAL_DR_SEED if present, else nondet.
-            visual_seed_env = os.environ.get("GYM_DR_VISUAL_DR_SEED")
-            visual_seed = int(visual_seed_env) if visual_seed_env not in (None, "") else None
-            self._visual_dr_rng_ = np.random.default_rng(visual_seed)
-            try:
-                # Lazy import: only the gated visual-DR path needs it, so the
-                # default path never pulls in the visual-discovery machinery.
-                from deepracer_env.domain_randomizations.visual_randomizer import VisualRandomizer
-                self._visual_randomizer_ = VisualRandomizer()
-            except Exception as ex:  # noqa: BLE001 - never break reset on DR setup
-                LOG.warning("Visual DR setup failed, disabling visual DR: %s", ex)
-                self._visual_randomizer_ = None
+        # Consolidated per-arena domain randomizer (the full DR catalog). Seeded
+        # per car (agent_idx) so arenas running the same track still differ; its
+        # track entity is this car's own track instance for decoupled recolour.
+        # Every knob defaults off (RandomizationSpec.from_env) so existing runs
+        # are unaffected. See domain_randomizations/{spec,domain_randomizer}.py.
+        self._dr_spec_ = RandomizationSpec.from_env()
+        _dr_seed = (self._agent_idx_ or 0) + 1000
+        _track_entity = ("racetrack" if self._agent_idx_ is None
+                         else "racetrack_{}".format(self._agent_idx_))
+        self._dr_ = DomainRandomizer(self._dr_spec_, np.random.default_rng(_dr_seed),
+                                     track_entity_name=_track_entity)
+        self._episode_dr_ = None          # last EpisodeRandomization (info labels)
+        self._steering_bias_rad_ = 0.0    # actuator-bias DR, applied in send_action
+        self._motor_delay_steps_ = 0      # action-lag DR
+        self._action_delay_buf_ = []      # lagged-action ring buffer
+        # Per-episode visual domain randomization is now owned by the
+        # consolidated per-arena DomainRandomizer above (self._dr_), which
+        # recolours THIS car's track via the seam's native gz visual_config
+        # (Route B — no discovery, no custom plugin). The legacy
+        # discovery-based VisualRandomizer is retired.
         # Dictionary to track the previous way points
         self._prev_waypoints_ = {'prev_point' : Point(0, 0), 'prev_point_2' : Point(0, 0)}
 
@@ -309,20 +305,39 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         '''
         return self._reward_params_
 
+    @property
+    def dr_info(self):
+        '''Flat dict of the domain randomization applied this episode.
+
+        Surfaced in the env ``info`` (``dr_*`` keys) as supervision labels for
+        the future camera→feature-vector model; empty before the first reset.
+        '''
+        return self._episode_dr_.as_info() if self._episode_dr_ is not None else {}
+
     def reset_agent(self):
         '''reset agent by reseting member variables, reset s3 metrics, and reset agent to
            starting position at the beginning of each episode
         '''
         LOG.info(f"Reset agent (count: {self._reset_count})")
         self._clear_data()
-        # Per-episode visual DR (gated by GYM_DR_VISUAL_DR): recolor the track
-        # model's visuals once per reset so a camera policy sees varied
-        # appearances. Wrapped so a recolor failure can never break the reset.
-        if self._visual_randomizer_ is not None:
-            try:
-                self._visual_randomizer_.randomize(self._visual_dr_rng_)
-            except Exception as ex:  # noqa: BLE001
-                LOG.warning("Visual DR randomize failed (continuing reset): %s", ex)
+        # Consolidated per-arena domain randomization: sample this episode's knobs
+        # and apply the simulator-side ones (recolour + lighting) to THIS car's
+        # track before the start pose is computed, so a random start/direction is
+        # reflected. Agent-side knobs (steering bias, motor delay) are stored for
+        # send_action; the bundle is surfaced via `dr_info` for the obs `info`.
+        try:
+            ep = self._dr_.sample()
+            self._episode_dr_ = ep
+            self._dr_.apply_sim(get_sim_control(), ep)
+            if ep.start_ndist is not None:
+                self._data_dict_['start_ndist'] = ep.start_ndist
+            if ep.reverse_dir is not None:
+                self._track_data_.reverse_dir = ep.reverse_dir
+            self._steering_bias_rad_ = ep.steering_bias_rad
+            self._motor_delay_steps_ = ep.motor_delay_steps
+            self._action_delay_buf_ = []
+        except Exception as ex:  # noqa: BLE001 — DR must never break a reset
+            LOG.warning("Domain randomization failed (continuing reset): %s", ex)
         self._metrics.reset()
         send_action(self._velocity_pub_, self._steering_pub_, 0.0, 0.0)
         start_model_state = self._get_car_start_model_state()
@@ -614,10 +629,18 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
             GenericRolloutException: Agent phase is not defined
         '''
         if self._ctrl_status[AgentCtrlStatus.AGENT_PHASE.value] == AgentPhase.RUN.value:
-            steering_angle = float(action[0])
-            steering_angle = max(min(const.MAX_ANGLE, steering_angle), const.MIN_ANGLE)
+            # Motor-delay DR: act on the action from `motor_delay_steps` ago
+            # (an actuation lag the policy must be robust to). delay 0 == passthrough.
+            self._action_delay_buf_.append((float(action[0]), float(action[1])))
+            if len(self._action_delay_buf_) > self._motor_delay_steps_:
+                steer_deg, spd = self._action_delay_buf_.pop(0)
+            else:
+                steer_deg, spd = self._action_delay_buf_[0]
+            steering_angle = max(min(const.MAX_ANGLE, steer_deg), const.MIN_ANGLE)
             steering_angle = steering_angle * math.pi / 180.0
-            speed = max(min(const.MAX_SPEED, float(action[1])), const.MIN_SPEED)
+            # Steering-bias DR: a fixed per-episode actuator offset (radians).
+            steering_angle += self._steering_bias_rad_
+            speed = max(min(const.MAX_SPEED, spd), const.MIN_SPEED)
             action_speed = speed / self._wheel_radius_
             send_action(self._velocity_pub_, self._steering_pub_,
                         steering_angle, action_speed)

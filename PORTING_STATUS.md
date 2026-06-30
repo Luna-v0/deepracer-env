@@ -49,16 +49,22 @@ and verified** — see the table above. Randomization status: **random start
 position (`RANDOM_START`) and CW/CCW direction (`RANDOM_DIRECTION`/`ALT_DIR`) are
 implemented and survive the port**; the rest of the DR catalog is item 1 below.
 
-1. **DR consolidation (Phase 7)** — one per-arena `DomainRandomizer` over the full
-   catalog. Done already: random start/direction, recovery resets, per-spawn
-   friction. To do: per-*episode* friction, lighting DR, sensor-noise DR,
-   steering-bias/motor-delay, and **end-to-end visual recolor** (the seam + native
-   gz `visual_config` are wired, but `VisualRandomizer`'s visual *discovery* is
-   stubbed under Route B). Surface applied-DR + ground-truth feature vector in the
-   observation `info` as labels for the camera→feature dataset.
-2. **Live N-car multi-arena** — per-car namespaced controller managers so multiple
-   cars drive via ros2_control in one process (the `ArenaLayout` + per-entity seam
-   are ready; the controller-namespacing is the remaining piece).
+1. **DR consolidation (Phase 7)** — DONE: one per-arena `DomainRandomizer`
+   (`domain_randomizations/spec.py` + `domain_randomizer.py`) over the full
+   catalog — visual recolor (native gz `visual_config`), lighting (native gz
+   `light_config`, new `SimControl.set_light`), friction, start position,
+   direction, steering bias, motor delay, sensor noise — wired into `RolloutCtrl`
+   (per-car seed, scoped to the car's own track entity), with the applied `dr_*`
+   labels surfaced in the observation `info` for the camera→feature dataset.
+   Verified in-container (random start relocated the car; all `dr_*` in `info`).
+   Remaining nuance: per-*episode* friction is sampled + surfaced but not yet
+   applied at runtime (needs the gz `wheel_slip` service); the exact track
+   link/visual names for recolor are unverified headless (no GPU render).
+2. **Live N-car multi-arena** — DONE (authored + verified): `multi_arena.launch.py`
+   spawns N decoupled arenas (`ArenaLayout`) in one gz world, each car with its own
+   **namespaced** `gz_ros2_control` controller_manager (`/racecar_i/...`). Key fix:
+   never set `<controller_manager_name>` to a value containing `/` (gz turns it into
+   a node-name remap, which aborts the gz server) — namespace alone yields the FQN.
 3. **Behavioral parity (Phase 7 gate)** — old-vs-new lap comparison on
    `reinvent_base`; tune friction/drive gains. (Note: the env step is currently
    paced by the sensor's blocking `get_state`; with `sensors=[]` it free-runs.)

@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+#################################################################################
+#  deepracer-env — optional RENDER image (headless camera/LiDAR rendering)      #
+#                                                                               #
+#  The runtime image runs gz headless with NO GPU, so the OGRE2-based gz         #
+#  Sensors/GUI never render. This layer adds a software OpenGL stack (Mesa       #
+#  llvmpipe) + a virtual framebuffer (Xvfb) + ffmpeg, so camera / top-down      #
+#  sensors render headless (slowly) and frames can be captured to MP4 — used to #
+#  record the demo video on a machine without a GPU. On a GPU host, use EGL     #
+#  (gz `--headless-rendering`) instead; this image is the no-GPU fallback.       #
+#################################################################################
+FROM deepracer-env:0.1-cpu-lyrical
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb \
+        x11-utils \
+        libgl1-mesa-dri \
+        libglx-mesa0 \
+        libglu1-mesa \
+        mesa-utils \
+        ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Force the Mesa software rasteriser (llvmpipe) so OGRE2 gets a GL 4.x context
+# under Xvfb with no GPU.
+ENV LIBGL_ALWAYS_SOFTWARE=1 \
+    GALLIUM_DRIVER=llvmpipe \
+    MESA_GL_VERSION_OVERRIDE=4.5 \
+    MESA_GLSL_VERSION_OVERRIDE=450
+
+CMD ["bash"]

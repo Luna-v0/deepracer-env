@@ -340,6 +340,10 @@ class DeepRacerEnv(gymnasium.Env):
             'objects_location': [list(xy) for _, xy in placed],
             'is_crashed': False,
         }
+        # Applied domain-randomization labels for this episode.
+        ctrl = getattr(self._agent, 'ctrl', None)
+        if ctrl is not None and hasattr(ctrl, 'dr_info'):
+            info.update(ctrl.dr_info)
         self._last_step_info = info
         self._has_reset = True
         return obs, info
@@ -380,6 +384,9 @@ class DeepRacerEnv(gymnasium.Env):
             info['is_crashed'] = bool(reward_params.get('is_crashed', False))
             info['is_offtrack'] = bool(reward_params.get('is_offtrack', False))
             info['closest_objects'] = list(reward_params.get('closest_objects', [-1, -1]))
+        # Applied domain-randomization labels (dr_* keys) for dataset collection.
+        if ctrl is not None and hasattr(ctrl, 'dr_info'):
+            info.update(ctrl.dr_info)
         self._last_step_info = info
         return obs, float(reward), bool(done), False, info
 

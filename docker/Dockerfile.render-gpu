@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#################################################################################
+#  deepracer-env — GPU RENDER image (real headless OGRE2 via EGL)               #
+#                                                                               #
+#  Runs gz Jetty camera/LiDAR rendering on an NVIDIA GPU with no X server, using #
+#  EGL (`gz sim --headless-rendering`). The runtime image already ships          #
+#  libglvnd (libEGL/libGLX/libGL); this layer only adds the NVIDIA EGL ICD so    #
+#  EGL selects the driver, plus ffmpeg for capture. Run with `--gpus all`.       #
+#  (Use docker/Dockerfile.render — Xvfb + Mesa llvmpipe — as the no-GPU fallback.)#
+#################################################################################
+FROM deepracer-env:0.1-cpu-lyrical
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# NVIDIA EGL vendor ICD so libEGL dispatches to the driver (injected by the
+# nvidia container runtime when NVIDIA_DRIVER_CAPABILITIES includes 'graphics').
+COPY docker/files/10_nvidia.json /usr/share/glvnd/egl_vendor.d/10_nvidia.json
+
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=all \
+    LIBGL_ALWAYS_SOFTWARE=0 \
+    __GLX_VENDOR_LIBRARY_NAME=nvidia \
+    __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+# Force the NVIDIA EGL vendor ICD: with both Mesa and NVIDIA present, libEGL
+# otherwise tries Mesa's dri2 path on the NVIDIA card and fails
+# ("driver (null) / failed to create dri2 screen"). Pinning the vendor makes
+# EGL use the GPU directly for headless OGRE2 rendering.
+
+CMD ["bash"]

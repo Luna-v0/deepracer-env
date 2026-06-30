@@ -1,20 +1,29 @@
 # ros2_control configuration for the DeepRacer car under Gazebo Jetty.
 #
-# Loaded by the gz_ros2_control::GazeboSimSystem plugin embedded in the robot
-# URDF (see urdf/deepracer/deepracer_gz.urdf.xacro). It replaces the legacy
-# ros_control YAML (racecar_control_kinematics.yaml).
+# Loaded by the gz_ros2_control::GazeboSimROS2ControlPlugin embedded in the robot
+# URDF (see urdf/deepracer/deepracer_gz.urdf.xacro). Replaces the legacy
+# ros_control YAML.
+#
+# NAMESPACE-AGNOSTIC KEYS (important): the keys use the ``/**/`` wildcard so the
+# same file works for the single-car run (controller_manager at /controller_manager)
+# AND the multi-arena run (one controller_manager per car at
+# /racecar_i/controller_manager). ``/**`` matches any number of namespace levels
+# (including zero), so ``/**/controller_manager`` matches both /controller_manager
+# and /racecar_0/controller_manager, and likewise for the controller nodes. With
+# plain unprefixed keys the params would NOT reach a namespaced node, and the
+# controllers would fail to load ("type not specified" / "joints not initialized").
 #
 # Controller choice (see project memory "lyrical-jetty-substrate-verified"):
 # ros2_controllers 6.7 dropped the velocity_controllers / position_controllers
 # convenience packages, so we use the generic forward_command_controller — one
-# instance per joint group — commanded with std_msgs/Float64MultiArray. The
-# joint ORDER in each `joints:` list is the contract shared with
+# instance per joint group — commanded with std_msgs/Float64MultiArray. The joint
+# ORDER in each `joints:` list is the contract shared with
 # deepracer_env/agent_ctrl/drive.py (WHEEL_JOINTS / STEERING_JOINTS).
 #
 # The Ackermann geometry is realised by the URDF joints (same angle to both
 # steering hinges, same angular velocity to all four wheels) — exactly as the
 # legacy stack did — so no Ackermann decomposition lives in software.
-controller_manager:
+/**/controller_manager:
   ros__parameters:
     update_rate: 100  # Hz
 
@@ -28,7 +37,7 @@ controller_manager:
       type: forward_command_controller/ForwardCommandController
 
 # Four wheels, velocity command (rad/s). Order == drive.WHEEL_JOINTS.
-wheels_velocity_controller:
+/**/wheels_velocity_controller:
   ros__parameters:
     joints:
       - left_rear_wheel_joint
@@ -38,7 +47,7 @@ wheels_velocity_controller:
     interface_name: velocity
 
 # Two steering hinges, position command (rad). Order == drive.STEERING_JOINTS.
-steering_position_controller:
+/**/steering_position_controller:
   ros__parameters:
     joints:
       - left_steering_hinge_joint

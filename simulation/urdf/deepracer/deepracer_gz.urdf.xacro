@@ -16,6 +16,9 @@
   Args:
     car_name    : entity / topic namespace (e.g. "car_0") — sensors publish to
                   /<car_name>/camera/... and /<car_name>/scan.
+    namespace   : ROS namespace for this car's gz_ros2_control controller_manager
+                  (default "" = root). Set per-car (e.g. "racecar_1") so N cars
+                  in ONE gz world each get their own /<namespace>/controller_manager.
     friction_mu : wheel friction coefficient (domain-randomisation knob).
     ros2_control_config : absolute path to ros2_control.yaml.
     include_lidar : add the gpu_lidar sensor.
@@ -23,12 +26,15 @@
 <robot name="deepracer" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:arg name="car_name" default="car"/>
+  <xacro:arg name="namespace" default=""/>
+  <xacro:arg name="include_camera" default="true"/>
   <xacro:arg name="friction_mu" default="1.5"/>
   <xacro:arg name="ros2_control_config"
              default="/opt/simapp/share/deepracer_simulation_environment/config/ros2_control.yaml"/>
   <xacro:arg name="include_lidar" default="true"/>
 
   <xacro:property name="car_name" value="$(arg car_name)"/>
+  <xacro:property name="namespace" value="$(arg namespace)"/>
   <xacro:property name="mu" value="$(arg friction_mu)"/>
   <xacro:property name="mesh" value="model://meshes/deepracer"/>
 
@@ -182,22 +188,36 @@
          above is the ros2_control HARDWARE plugin, a different thing. -->
     <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>$(arg ros2_control_config)</parameters>
+      <!-- Per-car namespacing: when 'namespace' is non-empty, run this car's
+           controller_manager under that ROS namespace so N cars in ONE gz world
+           don't collide. The fully-qualified node becomes
+           /<namespace>/controller_manager. Do NOT set <controller_manager_name>
+           to "<ns>/controller_manager": gz_ros2_control turns it into a node
+           name remap (-r __node:=...), and a node NAME may not contain '/' — that
+           parse error throws uncaught and aborts the whole gz server. -->
+      <xacro:if value="${namespace != ''}">
+        <ros>
+          <namespace>${namespace}</namespace>
+        </ros>
+      </xacro:if>
     </plugin>
   </gazebo>
 
-  <gazebo reference="camera_link">
-    <sensor name="zed_camera" type="camera">
-      <topic>${car_name}/camera/zed/rgb/image_rect_color</topic>
-      <gz_frame_id>camera_link</gz_frame_id>
-      <update_rate>15</update_rate>
-      <always_on>1</always_on>
-      <camera>
-        <horizontal_fov>1.13</horizontal_fov>
-        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
-        <clip><near>0.02</near><far>300</far></clip>
-      </camera>
-    </sensor>
-  </gazebo>
+  <xacro:if value="$(arg include_camera)">
+    <gazebo reference="camera_link">
+      <sensor name="zed_camera" type="camera">
+        <topic>${car_name}/camera/zed/rgb/image_rect_color</topic>
+        <gz_frame_id>camera_link</gz_frame_id>
+        <update_rate>15</update_rate>
+        <always_on>1</always_on>
+        <camera>
+          <horizontal_fov>1.13</horizontal_fov>
+          <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+          <clip><near>0.02</near><far>300</far></clip>
+        </camera>
+      </sensor>
+    </gazebo>
+  </xacro:if>
 
   <xacro:if value="$(arg include_lidar)">
     <gazebo reference="laser">

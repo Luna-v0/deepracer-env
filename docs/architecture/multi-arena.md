@@ -226,3 +226,30 @@ The frozen obs/action contract is preserved byte-for-byte (action
 * The DR streams each arena seeds: [domain randomization](domain-randomization.md).
 * Turning a classic `.world` into the per-arena track meshes: [world conversion](world-conversion.md).
 * Driving each namespaced car: [drive layer](drive.md).
+
+## Live N-car bring-up (implementation)
+
+The N decoupled arenas are launched by
+[`launch/multi_arena.launch.py`](../../simulation/src/deepracer_simulation_environment/launch/multi_arena.launch.py):
+one `gz` server, then per arena `i` a track instance `racetrack_i` at the grid
+offset, a namespaced `robot_state_publisher`, a spawned car `racecar_i`, and that
+car's own **namespaced `gz_ros2_control` controller_manager** at
+`/racecar_i/controller_manager`. `RolloutCtrl` publishes each car's commands to
+`/racecar_i/wheels_velocity_controller/commands` + `/racecar_i/steering_position_controller/commands`.
+
+Two namespacing rules make multiple controller-managers coexist in one server
+(both learned the hard way):
+
+* **Never** set `<controller_manager_name>` to a value containing `/` — gz turns
+  it into a node-name remap (`-r __node:=…`), and a node *name* may not contain
+  `/`; the uncaught parse error aborts the whole gz server. Use the
+  `<ros><namespace>` element alone; the FQN becomes `/racecar_i/controller_manager`.
+* `config/ros2_control.yaml` uses `/**/`-prefixed keys
+  (`/**/controller_manager`, `/**/wheels_velocity_controller`, …) so the params
+  reach the *namespaced* controller nodes. `/**` matches zero-or-more namespace
+  levels, so the **one** file serves both the single-car run (`/controller_manager`)
+  and every arena (`/racecar_i/controller_manager`).
+
+**Verified** in a real gz Jetty container: two namespaced controller-managers
+come up and activate hardware in one server, and both cars drive simultaneously
+from their `/racecar_i/...` command topics.
