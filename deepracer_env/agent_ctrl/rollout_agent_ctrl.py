@@ -271,6 +271,15 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         LOG.info("RolloutCtrl rebound to new TrackData (track_length=%.2f)",
                  self._track_data_.get_track_length())
 
+    @property
+    def current_sim_time(self) -> float:
+        """Latest simulation time (s), updated from the /clock tracker callback.
+
+        Used by the env to pace each step to a fixed sim-dt (the feature/camera-off
+        path has no camera frame to wait on, so without this the step can outrun
+        the sim — uncontrolled control rate + inflated throughput under load)."""
+        return self._current_sim_time
+
     def update_tracker(self, delta_time, sim_time):
         """
         Callback when sim time is updated

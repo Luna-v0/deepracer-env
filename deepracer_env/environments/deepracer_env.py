@@ -64,6 +64,7 @@ Each value is a ``Box`` matching the sensor's output shape.
 '''
 import logging
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -300,6 +301,14 @@ class DeepRacerEnv(gymnasium.Env):
 
         # Store last step info for diagnostics
         self._last_step_info: Dict[str, Any] = {}
+        # Step pacing: hold each step until the SIM clock advances by this many
+        # seconds, so the control rate is fixed (default 1/15 s, matching the AWS
+        # camera rate) regardless of RTF or host load. The camera path already
+        # waits ~1/15 s on the next frame, so this is a no-op there; the feature/
+        # camera-off path has no such wait and would otherwise outrun the sim
+        # (uncontrolled dt + inflated throughput under contention). 0 disables.
+        self._step_dt: float = float(os.getenv("GYM_DR_STEP_DT", "0.0667"))
+        self._last_step_sim_time: Optional[float] = None
 
         # Runtime world-swap state. The WorldSwapper (Gazebo spawn/delete
         # plumbing) is created lazily on the first set_world() call so that
@@ -346,6 +355,7 @@ class DeepRacerEnv(gymnasium.Env):
             info.update(ctrl.dr_info)
         self._last_step_info = info
         self._has_reset = True
+        self._last_step_sim_time = None  # re-anchor pacing to the new episode
         return obs, info
 
     def step(
@@ -370,6 +380,11 @@ class DeepRacerEnv(gymnasium.Env):
         '''
         # 1. Publish command to Gazebo
         self._agent.send_action(action)
+        # 1b. Pace to a fixed sim-dt before reading the result, so the car has
+        #     actually moved for one control period (and the loop can't outrun
+        #     the sim under load). No-op for the camera path (its frame wait
+        #     already advances the clock past _step_dt).
+        self._pace_to_sim_dt()
         # 2. Advance internal state (read car position, compute metrics)
         agents_info_map = self._agent.update_agent(action)
         # 3. Evaluate the action (compute reward, termination)
@@ -389,6 +404,29 @@ class DeepRacerEnv(gymnasium.Env):
             info.update(ctrl.dr_info)
         self._last_step_info = info
         return obs, float(reward), bool(done), False, info
+
+    def _pace_to_sim_dt(self) -> None:
+        """Block until the sim clock has advanced ``_step_dt`` since the last step.
+
+        Bounds the loop to the simulator's real progress (fixed control rate,
+        valid throughput). Times out after a short wall budget so a stalled clock
+        can't hang the episode. No-op when ``_step_dt<=0`` or no controller clock.
+        """
+        dt = self._step_dt
+        if dt <= 0:
+            return
+        ctrl = getattr(self._agent, 'ctrl', None)
+        now = getattr(ctrl, 'current_sim_time', None) if ctrl is not None else None
+        if now is None:
+            return
+        if self._last_step_sim_time is None:
+            self._last_step_sim_time = now
+            return
+        target = self._last_step_sim_time + dt
+        deadline = time.monotonic() + 2.0
+        while ctrl.current_sim_time < target and time.monotonic() < deadline:
+            time.sleep(0.0005)
+        self._last_step_sim_time = ctrl.current_sim_time
 
     def close(self) -> None:
         '''Stop the car and release resources.'''

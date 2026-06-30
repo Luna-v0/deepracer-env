@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from deepracer_env.environments.deepracer_env import DEFAULT_ACTION_SPACE, build_agent
@@ -86,10 +87,33 @@ class MultiAgentDeepRacerEnv:
         # single_observation_space / single_action_space).
         self.single_observation_space = self._agents[0].get_observation_space()
         self.single_action_space = DEFAULT_ACTION_SPACE
+        # Fixed sim-dt pacing (see DeepRacerEnv._pace_to_sim_dt). One shared clock.
+        self._step_dt: float = float(os.getenv("GYM_DR_STEP_DT", "0.0667"))
+        self._last_step_sim_time: Optional[float] = None
+
+    def _pace_to_sim_dt(self) -> None:
+        """Hold until the shared sim clock advances ``_step_dt`` (one clock, all
+        cars). Times out after a short wall budget. No-op if disabled / no clock."""
+        dt = self._step_dt
+        if dt <= 0 or not self._agents:
+            return
+        ctrl = getattr(self._agents[0], "ctrl", None)
+        now = getattr(ctrl, "current_sim_time", None) if ctrl is not None else None
+        if now is None:
+            return
+        if self._last_step_sim_time is None:
+            self._last_step_sim_time = now
+            return
+        target = self._last_step_sim_time + dt
+        deadline = time.monotonic() + 2.0
+        while ctrl.current_sim_time < target and time.monotonic() < deadline:
+            time.sleep(0.0005)
+        self._last_step_sim_time = ctrl.current_sim_time
 
     # ------------------------------------------------------------------ #
     def reset(self) -> List[dict]:
         """Reset all cars; return the list of N initial observations."""
+        self._last_step_sim_time = None  # re-anchor pacing
         return [agent.reset_agent() for agent in self._agents]
 
     def reset_one(self, i: int) -> dict:
@@ -106,6 +130,9 @@ class MultiAgentDeepRacerEnv:
         # 1. publish all actions (cars advance together in the shared world)
         for agent, action in zip(self._agents, actions):
             agent.send_action(action)
+        # 1b. Pace the shared world to a fixed sim-dt so the VecEnv step can't
+        #     outrun the sim (one clock for all cars; pace once).
+        self._pace_to_sim_dt()
         # 2. read every car's resulting state
         obs_l, rew_l, done_l, info_l = [], [], [], []
         for agent, action in zip(self._agents, actions):
