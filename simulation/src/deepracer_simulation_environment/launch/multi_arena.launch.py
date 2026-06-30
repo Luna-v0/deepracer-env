@@ -60,11 +60,13 @@ from launch.actions import (
     OpaqueFunction,
     RegisterEventHandler,
     SetEnvironmentVariable,
+    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 from deepracer_env.sim_control.arena import DEFAULT_ARENA_SPACING_M, ArenaLayout
 
@@ -127,6 +129,9 @@ def _launch_setup(context, *args, **kwargs):
     spacing = float(LaunchConfiguration("spacing").perform(context))
     friction_mu = LaunchConfiguration("friction_mu").perform(context)
     gui = LaunchConfiguration("gui")  # left as a substitution for IfCondition
+    # spawn_tracks:=false when a Python env (MultiAgentDeepRacerEnv) spawns the
+    # per-car track instances itself — avoids double-spawning racetrack_i.
+    spawn_tracks = LaunchConfiguration("spawn_tracks").perform(context).lower() == "true"
 
     xacro_file = os.path.join(share, "urdf", "deepracer", "deepracer_gz.urdf.xacro")
     ros2_control_cfg = os.path.join(share, "config", "ros2_control.yaml")
@@ -156,12 +161,26 @@ def _launch_setup(context, *args, **kwargs):
         ExecuteProcess(
             cmd=["gz", "sim", "-g"], output="screen", condition=IfCondition(gui),
         ),
-        # 4. ONE clock bridge (gz->ros); the sim clock is shared by all arenas.
+        # 4. ONE bridge: shared /clock + the shared dynamic_pose/info pose stream
+        #    (gz.msgs.Pose_V -> tf2_msgs/TFMessage). One pose topic carries EVERY
+        #    car's pose, so the SimControl seam reads all N cars from one
+        #    subscription instead of forking a `gz topic` per car per step.
         Node(
             package="ros_gz_bridge", executable="parameter_bridge",
-            name="clock_bridge", output="screen",
-            arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
+            name="clock_pose_bridge", output="screen",
+            arguments=[
+                "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
+                "/world/{}/dynamic_pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V".format(world),
+            ],
         ),
+        # 5. RTF override (training throughput) once the world is up. "0"=unlimited.
+        TimerAction(period=8.0, actions=[ExecuteProcess(
+            cmd=["gz", "service", "-s", "/world/{}/set_physics".format(world),
+                 "--reqtype", "gz.msgs.Physics", "--reptype", "gz.msgs.Boolean",
+                 "--timeout", "5000",
+                 "--req", "real_time_factor: {}, max_step_size: 0.001".format(
+                     os.environ.get("RTF_OVERRIDE", "0") or "0")],
+            output="screen")]),
     ]
 
     def spawner(car_name: str, name: str, param_file: bool = False) -> Node:
@@ -195,7 +214,7 @@ def _launch_setup(context, *args, **kwargs):
 
         # 2. Arena 0's track ships inside the world SDF at the origin; every
         #    other arena spawns its own offset track instance.
-        if arena.index >= 1:
+        if arena.index >= 1 and spawn_tracks:
             sdf_path = _write_track_instance_sdf(
                 world, arena.track_entity_name, ox, oy)
             actions.append(Node(
@@ -220,7 +239,8 @@ def _launch_setup(context, *args, **kwargs):
         actions.append(Node(
             package="robot_state_publisher", executable="robot_state_publisher",
             namespace=car_name, output="screen",
-            parameters=[{"robot_description": robot_description, "use_sim_time": True}],
+            parameters=[{"robot_description": ParameterValue(robot_description, value_type=str),
+                         "use_sim_time": True}],
         ))
 
         # 3b. Spawn the car at its arena origin from its namespaced description.
@@ -267,5 +287,9 @@ def generate_launch_description() -> LaunchDescription:
         DeclareLaunchArgument(
             "friction_mu", default_value="1.5",
             description="wheel friction coefficient (DR knob), applied to all cars"),
+        DeclareLaunchArgument(
+            "spawn_tracks", default_value="true",
+            description="spawn per-car track instances (false when a Python env "
+                        "like MultiAgentDeepRacerEnv spawns them itself)"),
     ]
     return LaunchDescription(declare + [OpaqueFunction(function=_launch_setup)])
