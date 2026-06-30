@@ -36,6 +36,7 @@ from launch.actions import (
     ExecuteProcess,
     RegisterEventHandler,
     SetEnvironmentVariable,
+    TimerAction,
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
@@ -147,7 +148,22 @@ def generate_launch_description() -> LaunchDescription:
         )
     )
 
+    # 6. Real-time-factor override for training throughput. The world ships
+    #    real_time_factor=1.0 (real-time, good for watching); training wants the
+    #    sim to run as fast as the CPU allows. RTF_OVERRIDE controls the target
+    #    factor — "0" (default) = unlimited; "1" = real-time; "4" = up to 4x.
+    #    Applied a few seconds after start via the gz set_physics service (the
+    #    world must be up first). dr-gym forwards RTF_OVERRIDE from
+    #    TrainingConfig.rtf_override.
+    rtf = os.environ.get("RTF_OVERRIDE", "0") or "0"
+    set_rtf = TimerAction(period=8.0, actions=[ExecuteProcess(
+        cmd=["gz", "service", "-s", ["/world/", world, "/set_physics"],
+             "--reqtype", "gz.msgs.Physics", "--reptype", "gz.msgs.Boolean",
+             "--timeout", "5000",
+             "--req", "real_time_factor: {}, max_step_size: 0.001".format(rtf)],
+        output="screen")])
+
     return LaunchDescription(
         declare + [plugin_path, resource_path, gz_server, gz_gui, rsp, spawn, bridge,
-                   image_bridge, controllers_after_spawn]
+                   image_bridge, controllers_after_spawn, set_rtf]
     )
