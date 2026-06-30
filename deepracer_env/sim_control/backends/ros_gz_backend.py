@@ -176,20 +176,21 @@ class RosGzBackend(SimControl):
     # -- entity lifecycle ------------------------------------------------------
 
     def spawn_entity(self, name, sdf, pose=IDENTITY_POSE, *, allow_renaming=False):  # noqa: D102
-        # gz EntityFactory spawns most reliably from a file; write the SDF out so
-        # multi-line model descriptions need no protobuf-text escaping.
-        fd, path = tempfile.mkstemp(suffix=".sdf", prefix="dr_spawn_")
-        try:
-            with os.fdopen(fd, "w") as fh:
-                fh.write(sdf)
-            req = 'sdf_filename: "{}" name: "{}" allow_renaming: {} pose {{{}}}'.format(
-                path, name, "true" if allow_renaming else "false", _fmt_pose(pose))
-            out = self._service("create", "gz.msgs.EntityFactory", "gz.msgs.Boolean", req)
-        finally:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        # gz EntityFactory spawns most reliably from a file (multi-line SDF needs
+        # no protobuf-text escaping). The create service reads `sdf_filename`
+        # ASYNCHRONOUSLY on the next gz update tick, so the file must OUTLIVE the
+        # service call — removing it in a finally (the old code) raced the spawn
+        # and gz logged "Error finding file". Write to a deterministic per-entity
+        # path and leave it: bounded (one file per name, overwritten on re-spawn),
+        # and gone when the ephemeral container exits.
+        import re
+        safe = re.sub(r"[^\w.-]", "_", str(name))
+        path = os.path.join(tempfile.gettempdir(), "dr_spawn_{}.sdf".format(safe))
+        with open(path, "w") as fh:
+            fh.write(sdf)
+        req = 'sdf_filename: "{}" name: "{}" allow_renaming: {} pose {{{}}}'.format(
+            path, name, "true" if allow_renaming else "false", _fmt_pose(pose))
+        out = self._service("create", "gz.msgs.EntityFactory", "gz.msgs.Boolean", req)
         if not self._ok(out):
             if not self._gz_alive():
                 raise SimControlDead("gz died spawning {!r}".format(name))

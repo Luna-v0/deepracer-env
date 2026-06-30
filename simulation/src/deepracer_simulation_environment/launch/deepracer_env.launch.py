@@ -75,17 +75,26 @@ def generate_launch_description() -> LaunchDescription:
                               description="track name (loads worlds/<world>.sdf)"),
         DeclareLaunchArgument("gui", default_value="false",
                               description="run the Gazebo GUI (false = headless server)"),
-        DeclareLaunchArgument("car_name", default_value="car",
-                              description="entity + topic namespace for the car"),
+        DeclareLaunchArgument("car_name", default_value="racecar",
+                              description="entity + topic namespace for the car. MUST match "
+                              "the env's agent name (DeepRacerEnv._build_agent defaults to "
+                              "'racecar'): the Camera sensor subscribes to /<car_name>/camera/... "
+                              "and the seam reads the '<car_name>' entity pose, so a mismatch "
+                              "means no camera frames (DoubleBuffer timeout) + wrong pose."),
         DeclareLaunchArgument("friction_mu", default_value="1.5",
                               description="wheel friction coefficient (DR knob)"),
     ]
 
     # 1. Gazebo: headless server, or server+GUI when gui:=true.
-    gz_server = ExecuteProcess(
-        cmd=["gz", "sim", "-s", "-r", "-v", "1", world_sdf],
-        output="screen",
-    )
+    #    GYM_DR_RENDER=1 adds --headless-rendering so camera/LiDAR SENSORS render
+    #    (via EGL on the GPU image). The feature/camera-off path leaves it off so
+    #    nothing renders (no wasted GPU/CPU). gz camera sensors only produce
+    #    frames when the server renders.
+    gz_cmd = ["gz", "sim", "-s", "-r", "-v", "1"]
+    if os.environ.get("GYM_DR_RENDER", "0") == "1":
+        gz_cmd.append("--headless-rendering")
+    gz_cmd.append(world_sdf)
+    gz_server = ExecuteProcess(cmd=gz_cmd, output="screen")
     gz_gui = ExecuteProcess(
         cmd=["gz", "sim", "-g"], output="screen", condition=IfCondition(gui),
     )

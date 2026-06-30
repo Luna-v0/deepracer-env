@@ -155,8 +155,13 @@ def _launch_setup(context, *args, **kwargs):
         ),
         SetEnvironmentVariable(name="GZ_SIM_SYSTEM_PLUGIN_PATH", value=ros_lib),
         # 1. ONE gz server on arena-0's world SDF (headless unless gui:=true).
+        #    GYM_DR_RENDER=1 -> --headless-rendering so the cars' cameras render
+        #    (EGL/GPU on the render-gpu image); off for the feature path.
         ExecuteProcess(
-            cmd=["gz", "sim", "-s", "-r", "-v", "1", world_sdf], output="screen",
+            cmd=(["gz", "sim", "-s", "-r", "-v", "1"]
+                 + (["--headless-rendering"] if os.environ.get("GYM_DR_RENDER", "0") == "1" else [])
+                 + [world_sdf]),
+            output="screen",
         ),
         ExecuteProcess(
             cmd=["gz", "sim", "-g"], output="screen", condition=IfCondition(gui),
@@ -269,6 +274,16 @@ def _launch_setup(context, *args, **kwargs):
                 spawner(car_name, "steering_position_controller", param_file=True),
             ],
         )))
+
+        # 3d. Camera bridge (gz->ROS) for this car, when rendering. Without it the
+        #     camera obs path gets no frames (DoubleBuffer timeout). One bridge per
+        #     car so the sensor topic /<car>/camera/... reaches the env.
+        if os.environ.get("GYM_DR_RENDER", "0") == "1":
+            actions.append(Node(
+                package="ros_gz_image", executable="image_bridge",
+                name="cam_bridge_{}".format(car_name), output="screen",
+                arguments=["{}/camera/zed/rgb/image_rect_color".format(car_name)],
+            ))
 
     return actions
 
