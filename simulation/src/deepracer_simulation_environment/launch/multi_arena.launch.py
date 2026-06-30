@@ -171,6 +171,10 @@ def _launch_setup(context, *args, **kwargs):
             arguments=[
                 "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
                 "/world/{}/dynamic_pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V".format(world),
+                # one set_pose service for the shared world -> the seam teleports
+                # every car via a persistent rclpy client (no per-reset subprocess).
+                "/world/{}/set_pose@ros_gz_interfaces/srv/SetEntityPose"
+                "@gz.msgs.Pose@gz.msgs.Boolean".replace("{}", world),
             ],
         ),
         # 5. RTF override (training throughput) once the world is up. "0"=unlimited.

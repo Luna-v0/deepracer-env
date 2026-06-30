@@ -121,6 +121,12 @@ def generate_launch_description() -> LaunchDescription:
         arguments=[
             "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock",
             ["/world/", world, "/dynamic_pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V"],
+            # set_pose as a ROS service -> the seam teleports via a persistent
+            # rclpy client instead of forking a `gz service` per reset (~270ms).
+            # gz req/rep types are given explicitly (the bridge doesn't auto-map
+            # SetEntityPose otherwise).
+            ["/world/", world,
+             "/set_pose@ros_gz_interfaces/srv/SetEntityPose@gz.msgs.Pose@gz.msgs.Boolean"],
             [car_name, "/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan"],
         ],
     )

@@ -105,6 +105,11 @@ class RosGzBackend(SimControl):
         self._sub_cache: Dict[str, Tuple[Pose, float]] = {}
         self._pose_sub = None
         self._pose_sub_tried = False
+        # Fast teleport path: a persistent rclpy client for the bridged set_pose
+        # service, instead of forking a `gz service` per reset (~270ms = the
+        # dominant short-episode/reset cost). Falls back to the gz CLI.
+        self._set_pose_client = None
+        self._set_pose_tried = False
 
     # -- capabilities ----------------------------------------------------------
 
@@ -308,12 +313,74 @@ class RosGzBackend(SimControl):
             dyaw += 2 * 3.141592653589793
         return Twist(linear=lin, angular=Vec3(0.0, 0.0, dyaw / dt))
 
+    def _ensure_set_pose_client(self) -> None:
+        """Lazily create the rclpy client for the bridged set_pose service.
+
+        Uses a DEDICATED node + executor (not the shared background SimNode), so
+        the call can ``spin_until_future_complete`` synchronously — the same
+        pattern ``ros2 service call`` uses, which works where a call_async on the
+        background-spun node did not.
+        """
+        if self._set_pose_tried:
+            return
+        self._set_pose_tried = True
+        try:
+            import rclpy
+            from rclpy.executors import SingleThreadedExecutor
+            from rclpy.node import Node
+            from ros_gz_interfaces.srv import SetEntityPose
+
+            from deepracer_env.sim_control.rclpy_client import ensure_rclpy_initialized
+
+            ensure_rclpy_initialized()
+            self._set_pose_node = Node("deepracer_set_pose_client")
+            self._set_pose_exec = SingleThreadedExecutor()
+            self._set_pose_exec.add_node(self._set_pose_node)
+            cli = self._set_pose_node.create_client(
+                SetEntityPose, "{}/set_pose".format(self._prefix))
+            if cli.wait_for_service(timeout_sec=5.0):
+                self._set_pose_client = cli
+                LOG.info("RosGzBackend: using bridged set_pose service client")
+            else:
+                LOG.warning("RosGzBackend: set_pose service bridge not up; gz-CLI fallback")
+                self._set_pose_client = None
+        except Exception as ex:  # noqa: BLE001
+            LOG.warning("RosGzBackend: set_pose client unavailable (%s); gz-CLI fallback", ex)
+            self._set_pose_client = None
+
     def set_entity_state(self, name, state, *, blocking=True):  # noqa: D102
         # gz `set_pose` sets pose only; twist is re-settled by physics + the
         # zeroed wheel commands the reset path already issues. (See note in the
         # module docstring; a twist-set needs the entity component API.)
-        req = 'name: "{}" {}'.format(name, _fmt_pose(state.pose))
-        out = self._service("set_pose", "gz.msgs.Pose", "gz.msgs.Boolean", req)
+        self._ensure_set_pose_client()
+        if self._set_pose_client is not None:
+            from ros_gz_interfaces.msg import Entity
+            from ros_gz_interfaces.srv import SetEntityPose
+
+            req = SetEntityPose.Request()
+            req.entity.name = name
+            req.entity.type = Entity.MODEL
+            p, o = state.pose.position, state.pose.orientation
+            req.pose.position.x, req.pose.position.y, req.pose.position.z = p.x, p.y, p.z
+            req.pose.orientation.x = o.x
+            req.pose.orientation.y = o.y
+            req.pose.orientation.z = o.z
+            req.pose.orientation.w = o.w
+            import rclpy
+
+            future = self._set_pose_client.call_async(req)
+            rclpy.spin_until_future_complete(
+                self._set_pose_node, future, self._set_pose_exec, timeout_sec=2.0)
+            if future.done():
+                res = future.result()
+                return bool(getattr(res, "success", True))
+            # timed out -> disable the client (no per-reset 2s penalty) and use
+            # the gz CLI from here on.
+            LOG.warning("set_pose service call timed out for %r; disabling client, gz-CLI fallback", name)
+            self._set_pose_client = None
+
+        req_txt = 'name: "{}" {}'.format(name, _fmt_pose(state.pose))
+        out = self._service("set_pose", "gz.msgs.Pose", "gz.msgs.Boolean", req_txt)
         if not self._ok(out) and not self._gz_alive():
             raise SimControlDead("gz died teleporting {!r}".format(name))
         return self._ok(out)

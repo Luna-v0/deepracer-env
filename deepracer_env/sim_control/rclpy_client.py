@@ -30,7 +30,7 @@ import time
 from typing import Optional
 
 import rclpy
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from deepracer_env.sim_control.interface import SimControlError, SimControlTimeout
@@ -73,7 +73,10 @@ class SimNode(Node):
         """
         ensure_rclpy_initialized()
         super().__init__(name, namespace=namespace or None)
-        self._executor = SingleThreadedExecutor()
+        # Multi-threaded so a high-rate subscription (the bridged dynamic_pose
+        # stream, which floods at unlimited RTF) cannot starve a concurrent
+        # service-client response (set_pose) on the same node.
+        self._executor = MultiThreadedExecutor()
         self._executor.add_node(self)
         self._spin_thread: Optional[threading.Thread] = None
         self._spinning = False
