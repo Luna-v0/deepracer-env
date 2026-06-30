@@ -325,7 +325,8 @@ class RosGzBackend(SimControl):
             return
         self._set_pose_tried = True
         try:
-            import rclpy
+            import threading
+
             from rclpy.executors import SingleThreadedExecutor
             from rclpy.node import Node
             from ros_gz_interfaces.srv import SetEntityPose
@@ -336,6 +337,13 @@ class RosGzBackend(SimControl):
             self._set_pose_node = Node("deepracer_set_pose_client")
             self._set_pose_exec = SingleThreadedExecutor()
             self._set_pose_exec.add_node(self._set_pose_node)
+            # Spin the DEDICATED executor on its own daemon thread: it services
+            # only the set_pose client, so the call_async future completes
+            # promptly (no flooding sub to starve it, unlike the shared SimNode).
+            # Avoids spin_until_future_complete, which re-enters and raises
+            # "Executor is already spinning" when resets interleave with steps.
+            threading.Thread(target=self._set_pose_exec.spin,
+                             name="dr-set-pose-exec", daemon=True).start()
             cli = self._set_pose_node.create_client(
                 SetEntityPose, "{}/set_pose".format(self._prefix))
             if cli.wait_for_service(timeout_sec=5.0):
@@ -366,11 +374,10 @@ class RosGzBackend(SimControl):
             req.pose.orientation.y = o.y
             req.pose.orientation.z = o.z
             req.pose.orientation.w = o.w
-            import rclpy
-
             future = self._set_pose_client.call_async(req)
-            rclpy.spin_until_future_complete(
-                self._set_pose_node, future, self._set_pose_exec, timeout_sec=2.0)
+            deadline = time.monotonic() + 2.0
+            while not future.done() and time.monotonic() < deadline:
+                time.sleep(0.0005)  # the dedicated bg executor completes it
             if future.done():
                 res = future.result()
                 return bool(getattr(res, "success", True))
