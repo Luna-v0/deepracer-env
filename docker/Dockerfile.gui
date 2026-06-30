@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+#################################################################################
+#  deepracer-env — VNC GUI image (live Gazebo Jetty view over TigerVNC)         #
+#                                                                               #
+#  Restores the classic ROS 1 stack's live-view workflow on Gazebo Jetty: the   #
+#  container runs the gz-sim GUI on a virtual X display (Xvfb) under a light     #
+#  window manager (jwm) and serves it with x11vnc on :5900. Connect a desktop   #
+#  VNC client (TigerVNC / RealVNC) to localhost:5900 to watch the simulation    #
+#  live and drag the camera freely — no blind offscreen-camera aiming.          #
+#                                                                               #
+#  Built on the RENDER image, so the gz OGRE2 scene renders through Mesa        #
+#  llvmpipe (software GL) with no GPU required — parity with the classic        #
+#  xvfb-run + x11vnc path. (GPU-accelerated GUI over VNC would need VirtualGL.)  #
+#                                                                               #
+#  Build:  docker build -f docker/Dockerfile.gui -t deepracer-env:gui .         #
+#  Watch:  docker run --rm -p 5900:5900 -v $PWD:/ws \                           #
+#            -e WORLD_NAME=reinvent_base deepracer-env:gui                       #
+#          then point TigerVNC at localhost:5900                                #
+#################################################################################
+FROM deepracer-env:render
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        x11vnc \
+        jwm \
+        imagemagick \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/files/vnc-gui.sh /usr/local/bin/vnc-gui.sh
+RUN chmod +x /usr/local/bin/vnc-gui.sh
+
+ENV DISPLAY=:0 \
+    VNC_PORT=5900 \
+    VNC_GEOMETRY=1600x900x24
+
+EXPOSE 5900
+ENTRYPOINT ["/usr/local/bin/vnc-gui.sh"]
+CMD []
