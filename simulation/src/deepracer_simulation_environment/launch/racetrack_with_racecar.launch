@@ -80,6 +80,144 @@
     <arg name="make_required" value="$(arg make_required)" />
   </include>
 
+  <!-- racecar_2: spawned only when the car count (len simapp_versions) > 2.
+       Generalises the old hardcoded 2-car cap (a LAUNCH limit, not a render limit).
+       car_node.py / get_racecar_names already handle N; only these blocks did not. -->
+  <include file="$(find deepracer_simulation_environment)/launch/racecar.launch" if="$(eval len(str(simapp_versions).split(',')) > 2)" ns="/racecar_2">
+    <arg name="racecar_name" value="racecar_2"/>
+    <arg name="racecar_bitmask" value="0x04"/>
+    <arg name="simapp_version" value="$(eval str(simapp_versions).split(',')[2])" />
+    <arg name="racecar_xacro_file" default="mit" if="$(eval str(simapp_versions).split(',')[2] == '1.0')"/>
+    <arg name="racecar_xacro_file" default="confetti" if="$(eval str(simapp_versions).split(',')[2] == '2.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[2] == '3.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[2] == '4.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer_kinematics" if="$(eval str(simapp_versions).split(',')[2] == '5.0')"/>
+    <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names.split(',')) > 2)" />
+    <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[2] if len(kinesis_video_stream_names.split(',')) > 2 else '')"/>
+    <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
+    <arg name="include_second_camera" value="$(eval 'racecar_2' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_2' in racecars_with_cameras.split(','))" />
+    <arg name="friction_mu" value="$(arg friction_mu)" />
+    <arg name="include_lidar_sensor" value="$(eval 'racecar_2' in racecars_with_lidars.split(','))" />
+    <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[2])" />
+    <arg name="make_required" value="$(arg make_required)" />
+  </include>
+
+  <!-- racecar_3: spawned only when the car count (len simapp_versions) > 3.
+       Generalises the old hardcoded 2-car cap (a LAUNCH limit, not a render limit).
+       car_node.py / get_racecar_names already handle N; only these blocks did not. -->
+  <include file="$(find deepracer_simulation_environment)/launch/racecar.launch" if="$(eval len(str(simapp_versions).split(',')) > 3)" ns="/racecar_3">
+    <arg name="racecar_name" value="racecar_3"/>
+    <arg name="racecar_bitmask" value="0x08"/>
+    <arg name="simapp_version" value="$(eval str(simapp_versions).split(',')[3])" />
+    <arg name="racecar_xacro_file" default="mit" if="$(eval str(simapp_versions).split(',')[3] == '1.0')"/>
+    <arg name="racecar_xacro_file" default="confetti" if="$(eval str(simapp_versions).split(',')[3] == '2.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[3] == '3.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[3] == '4.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer_kinematics" if="$(eval str(simapp_versions).split(',')[3] == '5.0')"/>
+    <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names.split(',')) > 3)" />
+    <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[3] if len(kinesis_video_stream_names.split(',')) > 3 else '')"/>
+    <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
+    <arg name="include_second_camera" value="$(eval 'racecar_3' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_3' in racecars_with_cameras.split(','))" />
+    <arg name="friction_mu" value="$(arg friction_mu)" />
+    <arg name="include_lidar_sensor" value="$(eval 'racecar_3' in racecars_with_lidars.split(','))" />
+    <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[3])" />
+    <arg name="make_required" value="$(arg make_required)" />
+  </include>
+
+  <!-- racecar_4: spawned only when the car count (len simapp_versions) > 4.
+       Generalises the old hardcoded 2-car cap (a LAUNCH limit, not a render limit).
+       car_node.py / get_racecar_names already handle N; only these blocks did not. -->
+  <include file="$(find deepracer_simulation_environment)/launch/racecar.launch" if="$(eval len(str(simapp_versions).split(',')) > 4)" ns="/racecar_4">
+    <arg name="racecar_name" value="racecar_4"/>
+    <arg name="racecar_bitmask" value="0x10"/>
+    <arg name="simapp_version" value="$(eval str(simapp_versions).split(',')[4])" />
+    <arg name="racecar_xacro_file" default="mit" if="$(eval str(simapp_versions).split(',')[4] == '1.0')"/>
+    <arg name="racecar_xacro_file" default="confetti" if="$(eval str(simapp_versions).split(',')[4] == '2.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[4] == '3.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[4] == '4.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer_kinematics" if="$(eval str(simapp_versions).split(',')[4] == '5.0')"/>
+    <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names.split(',')) > 4)" />
+    <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[4] if len(kinesis_video_stream_names.split(',')) > 4 else '')"/>
+    <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
+    <arg name="include_second_camera" value="$(eval 'racecar_4' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_4' in racecars_with_cameras.split(','))" />
+    <arg name="friction_mu" value="$(arg friction_mu)" />
+    <arg name="include_lidar_sensor" value="$(eval 'racecar_4' in racecars_with_lidars.split(','))" />
+    <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[4])" />
+    <arg name="make_required" value="$(arg make_required)" />
+  </include>
+
+  <!-- racecar_5: spawned only when the car count (len simapp_versions) > 5.
+       Generalises the old hardcoded 2-car cap (a LAUNCH limit, not a render limit).
+       car_node.py / get_racecar_names already handle N; only these blocks did not. -->
+  <include file="$(find deepracer_simulation_environment)/launch/racecar.launch" if="$(eval len(str(simapp_versions).split(',')) > 5)" ns="/racecar_5">
+    <arg name="racecar_name" value="racecar_5"/>
+    <arg name="racecar_bitmask" value="0x20"/>
+    <arg name="simapp_version" value="$(eval str(simapp_versions).split(',')[5])" />
+    <arg name="racecar_xacro_file" default="mit" if="$(eval str(simapp_versions).split(',')[5] == '1.0')"/>
+    <arg name="racecar_xacro_file" default="confetti" if="$(eval str(simapp_versions).split(',')[5] == '2.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[5] == '3.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[5] == '4.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer_kinematics" if="$(eval str(simapp_versions).split(',')[5] == '5.0')"/>
+    <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names.split(',')) > 5)" />
+    <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[5] if len(kinesis_video_stream_names.split(',')) > 5 else '')"/>
+    <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
+    <arg name="include_second_camera" value="$(eval 'racecar_5' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_5' in racecars_with_cameras.split(','))" />
+    <arg name="friction_mu" value="$(arg friction_mu)" />
+    <arg name="include_lidar_sensor" value="$(eval 'racecar_5' in racecars_with_lidars.split(','))" />
+    <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[5])" />
+    <arg name="make_required" value="$(arg make_required)" />
+  </include>
+
+  <!-- racecar_6: spawned only when the car count (len simapp_versions) > 6.
+       Generalises the old hardcoded 2-car cap (a LAUNCH limit, not a render limit).
+       car_node.py / get_racecar_names already handle N; only these blocks did not. -->
+  <include file="$(find deepracer_simulation_environment)/launch/racecar.launch" if="$(eval len(str(simapp_versions).split(',')) > 6)" ns="/racecar_6">
+    <arg name="racecar_name" value="racecar_6"/>
+    <arg name="racecar_bitmask" value="0x40"/>
+    <arg name="simapp_version" value="$(eval str(simapp_versions).split(',')[6])" />
+    <arg name="racecar_xacro_file" default="mit" if="$(eval str(simapp_versions).split(',')[6] == '1.0')"/>
+    <arg name="racecar_xacro_file" default="confetti" if="$(eval str(simapp_versions).split(',')[6] == '2.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[6] == '3.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[6] == '4.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer_kinematics" if="$(eval str(simapp_versions).split(',')[6] == '5.0')"/>
+    <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names.split(',')) > 6)" />
+    <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[6] if len(kinesis_video_stream_names.split(',')) > 6 else '')"/>
+    <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
+    <arg name="include_second_camera" value="$(eval 'racecar_6' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_6' in racecars_with_cameras.split(','))" />
+    <arg name="friction_mu" value="$(arg friction_mu)" />
+    <arg name="include_lidar_sensor" value="$(eval 'racecar_6' in racecars_with_lidars.split(','))" />
+    <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[6])" />
+    <arg name="make_required" value="$(arg make_required)" />
+  </include>
+
+  <!-- racecar_7: spawned only when the car count (len simapp_versions) > 7.
+       Generalises the old hardcoded 2-car cap (a LAUNCH limit, not a render limit).
+       car_node.py / get_racecar_names already handle N; only these blocks did not. -->
+  <include file="$(find deepracer_simulation_environment)/launch/racecar.launch" if="$(eval len(str(simapp_versions).split(',')) > 7)" ns="/racecar_7">
+    <arg name="racecar_name" value="racecar_7"/>
+    <arg name="racecar_bitmask" value="0x80"/>
+    <arg name="simapp_version" value="$(eval str(simapp_versions).split(',')[7])" />
+    <arg name="racecar_xacro_file" default="mit" if="$(eval str(simapp_versions).split(',')[7] == '1.0')"/>
+    <arg name="racecar_xacro_file" default="confetti" if="$(eval str(simapp_versions).split(',')[7] == '2.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[7] == '3.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer" if="$(eval str(simapp_versions).split(',')[7] == '4.0')"/>
+    <arg name="racecar_xacro_file" default="deepracer_kinematics" if="$(eval str(simapp_versions).split(',')[7] == '5.0')"/>
+    <arg name="publish_to_kinesis_stream" value="$(eval publish_to_kinesis_stream and len(kinesis_video_stream_names.split(',')) > 7)" />
+    <arg name="kinesis_video_stream_name" value="$(eval kinesis_video_stream_names.split(',')[7] if len(kinesis_video_stream_names.split(',')) > 7 else '')"/>
+    <arg name="kinesis_video_stream_region" value="$(arg kinesis_video_stream_region)"/>
+    <arg name="include_second_camera" value="$(eval 'racecar_7' in racecars_with_stereo_cameras.split(','))" />
+    <arg name="include_camera" value="$(eval 'racecar_7' in racecars_with_cameras.split(','))" />
+    <arg name="friction_mu" value="$(arg friction_mu)" />
+    <arg name="include_lidar_sensor" value="$(eval 'racecar_7' in racecars_with_lidars.split(','))" />
+    <arg name="body_shell_type" value="$(eval body_shell_types.split(',')[7])" />
+    <arg name="make_required" value="$(arg make_required)" />
+  </include>
+
   <include file="$(find deepracer_simulation_environment)/launch/empty_world.launch">
     <arg name="world_name" value="$(find deepracer_simulation_environment)/worlds/$(arg world_name).world"/>
     <arg name="gui" value="$(arg gui)"/>
@@ -87,7 +225,7 @@
   </include>
 
   <node pkg="deepracer_simulation_environment" type="car_node.py" name="car_reset_node" args="1" output="screen" required="$(arg make_required)" unless="$(arg multicar)"></node>
-  <node pkg="deepracer_simulation_environment" type="car_node.py" name="car_reset_node" args="2" output="screen" required="$(arg make_required)" if="$(arg multicar)"></node>
+  <node pkg="deepracer_simulation_environment" type="car_node.py" name="car_reset_node" args="$(eval len(str(simapp_versions).split(',')))" output="screen" required="$(arg make_required)" if="$(arg multicar)"></node>
 
   <!-- Enable local web server for video streaming -->
   <node pkg="web_video_server" type="web_video_server" name="web_video_server" output="screen" required="false" respawn="false"></node>

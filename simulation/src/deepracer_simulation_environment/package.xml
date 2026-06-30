@@ -1,42 +1,40 @@
 <?xml version="1.0"?>
-<package format="2">
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
   <name>deepracer_simulation_environment</name>
-  <version>1.0.0</version>
-  <description>The AWS DeepRacer simulation environment package</description>
-  <maintainer email="aws-deepracer@amazon.com">AWS DeepRacer</maintainer>
-  <license>Apache2.0</license>
+  <version>2.0.0</version>
+  <description>
+    DeepRacer simulation assets for ROS 2 Lyrical + Gazebo Jetty: the car URDF
+    (gz_ros2_control), ros2_control config, the converted Jetty world SDFs,
+    track models/meshes/routes, and the Python launch files. Ported from the
+    ROS 1 catkin package; the custom deepracer_msgs services and the
+    Gazebo-classic C++ plugin are gone (see ADR 0001, Route B).
+  </description>
+  <maintainer email="aws-deepracer@amazon.com">AWS DeepRacer Community</maintainer>
+  <license>Apache-2.0</license>
 
-  <buildtool_depend>catkin</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <build_depend>message_generation</build_depend>
-
-  <depend>rospy</depend>
-  <depend>gazebo</depend>
-  <depend>gazebo_ros</depend>
-  <depend>std_msgs</depend>
-  <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
-  <depend>image_transport</depend>
-  <depend>deepracer_msgs</depend>
-
-  <exec_depend>python3-defusedxml</exec_depend>
-  <exec_depend>catkin</exec_depend>
+  <!-- runtime: the substrate the launch brings up -->
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_image</exec_depend>
+  <exec_depend>gz_ros2_control</exec_depend>
   <exec_depend>controller_manager</exec_depend>
-  <exec_depend>gazebo_ros_control</exec_depend>
-  <exec_depend>gazebo_plugins</exec_depend>
+  <exec_depend>ros2_controllers</exec_depend>
+  <exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>forward_command_controller</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
-  <exec_depend>ros_controllers</exec_depend>
-  <exec_depend>ros_control</exec_depend>
-  <exec_depend>message_runtime</exec_depend>
-  <exec_depend>python3-shapely</exec_depend>
-  <exec_depend>python3-scipy</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-jsonschema</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
+  <test_depend>ament_lint_auto</test_depend>
   <test_depend>python3-pytest</test_depend>
-  <!-- The export tag contains other, unspecified, tags -->
+
   <export>
-    <gazebo_ros gazebo_model_path="${prefix}" />
-    <gazebo_ros plugin_path="${prefix}/.." />
+    <build_type>ament_cmake</build_type>
+    <!-- gz resolves model:// via GZ_SIM_RESOURCE_PATH pointed at this share dir
+         (set in the launch / entrypoint); it holds models/ and meshes/. -->
   </export>
 </package>

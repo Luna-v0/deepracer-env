@@ -1,0 +1,27 @@
+site_name: DeepRacer-Env (ROS 2 Lyrical / Gazebo Jetty)
+
+theme:
+  name: material
+
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - SimControl seam: architecture/sim-control-seam.md
+      - Tiled multi-arena: architecture/multi-arena.md
+      - Observation/action contract: architecture/observation-action-contract.md
+      - Drive & ros2_control: architecture/drive-and-control.md
+      - Domain randomization: architecture/domain-randomization.md
+      - World conversion: architecture/world-conversion.md
+  - Operations:
+      - Build & run: build-and-run.md
+      - Deployment: deployment.md
+  - Decisions:
+      - "ADR 0001: Eliminate the C++ plugin (Route B)": decisions/0001-route-b-eliminate-cpp-plugin.md
+      - "ADR 0002: Target ROS 2 Lyrical + Gazebo Jetty": decisions/0002-lyrical-jetty-stack.md

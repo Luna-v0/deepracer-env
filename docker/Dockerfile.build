@@ -1,12 +1,25 @@
-ARG CORE_PREFIX=awsdeepracercommunity
-FROM $CORE_PREFIX/deepracer-env-build-core:latest
+# syntax=docker/dockerfile:1
+#################################################################################
+#  deepracer-env — Stage 2 of 3: BUILD (colcon over the ament workspace)        #
+#                                                                               #
+#  Builds the ported ROS 2 workspace on top of the Lyrical/Jetty substrate.     #
+#  Only deepracer_simulation_environment builds (an ament_cmake resource +      #
+#  launch package); the Route-B-dropped packages (the Gazebo-classic C++ plugin,#
+#  deepracer_msgs, the node monitors) carry a COLCON_IGNORE and are skipped.    #
+#  Output is the merged install tree at /opt/bundle/install, consumed by        #
+#  Dockerfile.runtime.                                                          #
+#################################################################################
+ARG CORE_PREFIX=deepracer-env-build-core
+ARG CORE_TAG=lyrical
+FROM ${CORE_PREFIX}:${CORE_TAG}
 
-COPY simulation/ /opt/bundle
-COPY deepracer_env/ /opt/bundle/deepracer_env/
+# The whole simulation/ tree (src/ + the urdf/worlds/models/meshes/routes the
+# package installs via ../../). colcon discovers packages under src/.
+COPY simulation/ /opt/bundle/
 WORKDIR /opt/bundle
 
-RUN rosdep update --rosdistro=noetic -q && rosdep install --rosdistro=noetic --from-paths src --ignore-src -r -y 
-RUN bash -c "source /opt/ros/noetic/setup.bash && colcon build"
+RUN . /opt/ros/lyrical/setup.sh && \
+    colcon build --merge-install --install-base /opt/bundle/install \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-ENTRYPOINT ["/simulation-entrypoint.sh"]
 CMD ["bash"]

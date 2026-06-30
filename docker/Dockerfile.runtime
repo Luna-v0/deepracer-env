@@ -1,144 +1,44 @@
-ARG BUNDLE_PREFIX=awsdeepracercommunity
-ARG CORE_IMG=ubuntu:20.04
+# syntax=docker/dockerfile:1
+#################################################################################
+#  deepracer-env — Stage 3 of 3: RUNTIME                                        #
+#                                                                               #
+#  The final image dr-gym builds FROM. It starts from the Lyrical/Jetty         #
+#  substrate (which already carries gz Jetty, ros2_control, the ros_gz bridge), #
+#  copies the colcon install tree from the bundle stage into /opt/simapp,        #
+#  installs the deepracer_env Python package (no AWS deps — Route B/strip), and #
+#  wires the entrypoint that exports the two gz search paths the port needs.    #
+#################################################################################
+ARG BUNDLE_PREFIX=deepracer-env-build-bundle
+ARG BUNDLE_TAG=lyrical
+ARG CORE_PREFIX=deepracer-env-build-core
+ARG CORE_TAG=lyrical
 
-FROM ${BUNDLE_PREFIX}/deepracer-env-build-bundle:latest AS bundle
-FROM ${CORE_IMG}
+FROM ${BUNDLE_PREFIX}:${BUNDLE_TAG} AS bundle
+FROM ${CORE_PREFIX}:${CORE_TAG}
 
-ARG NVCC_VER=""
+ENV DEBIAN_FRONTEND=noninteractive \
+    ROS_DISTRO=lyrical
 
-ENV TZ="America/New_York" 
-ENV DEBIAN_FRONTEND="noninteractive" 
-RUN dpkg --add-architecture i386 && \
-    apt-get update && \ 
-    apt-get upgrade -y && \
-    apt-get install --no-install-recommends -y \
-    apt-utils \
-    build-essential \
-    cmake \
-    curl \
-    ffmpeg \
-    gnupg \
-    jwm \
-    jq \
-    libfreetype6-dev \
-    libgomp1 \
-    libhdf5-serial-dev \
-    libjpeg-dev \
-    libpng-dev \
-    libxrender1 \
-    libzmq3-dev \
-    lsb-core \
-    mesa-utils \
-    net-tools \
-    pkg-config \
-    python3-dev \
-    python3-opengl \
-    python3-pip \
-    wget \
-    x11-xserver-utils \
-    x11vnc \
-    xmlstarlet \
-    xvfb \
-    zlib1g-dev \
-    ${NVCC_VER} && \    
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Python deps for deepracer_env (training/runtime). Installed explicitly so the
+# package itself can go in --no-deps and never drag the stripped AWS stack.
+# Ubuntu 26.04 is PEP-668 externally-managed → --break-system-packages.
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+        gymnasium numpy scipy shapely opencv-python-headless pillow
 
-# Prevent docker build get stopped by requesting user interaction
-ENV DEBIAN_FRONTEND=noninteractive
-ENV DEBCONF_NONINTERACTIVE_SEEN=true
-# Python won’t try to write .pyc or .pyo files on the import of source modules
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-# See http://bugs.python.org/issue19846
-ENV PYTHONIOENCODING=UTF-8
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
+# Compiled workspace (deepracer_simulation_environment share: urdf/worlds/models/
+# meshes/routes/config/launch) from the bundle stage.
+COPY --from=bundle /opt/bundle/install /opt/simapp
 
-# nvidia-container-runtime
-ENV NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
-ENV NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-all}
-
-COPY docker/files/10_nvidia.json /usr/share/glvnd/egl_vendor.d/10_nvidia.json
-
-# Install ROS noetic and Gazebo9
-RUN sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
-RUN curl -s https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | apt-key add -
-
-RUN sh -c 'echo "deb http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -sc) main" > /etc/apt/sources.list.d/gazebo-stable.list'
-RUN curl -s http://packages.osrfoundation.org/gazebo.key | apt-key add -
-
-RUN apt-get update -y && \
-    apt-get install -y --allow-unauthenticated --no-install-recommends \
-    gazebo11 \
-    libgazebo11-dev \
-    libcurl4-openssl-dev \
-    libignition-math4 \
-    libignition-math4-dev \
-    liblog4cplus-dev \
-    libx264-dev \
-    python3-colcon-common-extensions \
-    python3-jsonschema \
-    python3-pip \
-    python3-rosdep \
-    python3-scipy \
-    python3-shapely \
-    ros-noetic-controller-manager \
-    ros-noetic-gazebo-plugins \
-    ros-noetic-gazebo-ros-control \
-    ros-noetic-media-export \
-    ros-noetic-ros-base \
-    ros-noetic-ros-control \
-    ros-noetic-ros-controllers \
-    ros-noetic-robot \
-    ros-noetic-rosmsg \
-    ros-noetic-rqt-common-plugins \
-    ros-noetic-web-video-server \
-    ros-noetic-xacro \
-    rviz \
-    x264 && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-ENV ROS_DISTRO=noetic
-
-# Install Python PIP modules
-ADD docker/requirements.txt /
-RUN python3 -m pip install -U --no-cache-dir pip 'setuptools<65' && \
-    export SKLEARN_ALLOW_DEPRECATED_SKLEARN_PACKAGE_INSTALL=True && \
-    pip3 install -U --no-cache-dir -r requirements.txt --ignore-installed psutil
-
-# Copy compiled bundle
-COPY --from=bundle  /opt/bundle/install /opt/simapp
-WORKDIR /opt/simapp
-
-# Install ROS dependencies
-RUN apt-get update -y && rosdep init && rosdep update --rosdistro=noetic -q && \
-    rosdep install --rosdistro=noetic --from-paths . --ignore-src -r -y deepracer_gazebo_system_plugin deepracer_msgs deepracer_simulation_environment && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-ENV COLCON_CURRENT_PREFIX="/opt/simapp"
-ENV COLCON_PYTHON_EXECUTABLE="/usr/bin/python3"
-ENV _CATKIN_SETUP_DIR="/opt/ros/noetic"
-
-# Install deepracer_env as a proper pip package
+# The Python env package, without its (AWS-laden) declared deps.
 COPY deepracer_env/ /tmp/deepracer-env/deepracer_env/
-COPY pyproject.toml requirements.txt VERSION /tmp/deepracer-env/
-RUN pip3 install --no-cache-dir /tmp/deepracer-env && rm -rf /tmp/deepracer-env
+COPY pyproject.toml VERSION /tmp/deepracer-env/
+RUN python3 -m pip install --no-cache-dir --break-system-packages --no-deps /tmp/deepracer-env \
+    && rm -rf /tmp/deepracer-env
 
-# Copy entrypoint and simulation scripts
-COPY ./docker/files/entrypoint.sh /entrypoint.sh
+COPY docker/files/entrypoint-lyrical.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-COPY ./docker/files/robomaker/run.sh run.sh
-COPY ./docker/files/robomaker/shutdown.sh shutdown.sh
-COPY ./simulation/script/start_deepracer_node_monitor.py start_deepracer_node_monitor.py
-COPY ./simulation/src/deepracer_node_monitor/config/*.txt .
 
-# Add labels
-COPY VERSION .
-ARG IMG_VERSION
-LABEL maintainer="AWS DeepRacer Community - deepracing.io"
-LABEL version=$IMG_VERSION
+ENV COLCON_CURRENT_PREFIX=/opt/simapp
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["./run.sh", "run", "deepracer_env.launch"]
+CMD ["bash"]

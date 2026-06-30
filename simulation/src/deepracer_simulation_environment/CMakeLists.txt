@@ -1,116 +1,33 @@
 #################################################################################
 #   Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.          #
-#                                                                               #
 #   Licensed under the Apache License, Version 2.0 (the "License").             #
-#   You may not use this file except in compliance with the License.            #
-#   You may obtain a copy of the License at                                     #
-#                                                                               #
-#       http://www.apache.org/licenses/LICENSE-2.0                              #
-#                                                                               #
-#   Unless required by applicable law or agreed to in writing, software         #
-#   distributed under the License is distributed on an "AS IS" BASIS,           #
-#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.    #
-#   See the License for the specific language governing permissions and         #
-#   limitations under the License.                                              #
 #################################################################################
+# ament_cmake port of the DeepRacer simulation-environment package.
+#
+# This package is now pure data + launch: it installs the car URDF, the
+# ros2_control config, the converted Jetty worlds, and the track models/meshes/
+# routes into the package share. There is no C++ to build (Route B removed the
+# Gazebo-classic plugin) and no message generation (the custom deepracer_msgs
+# services were dropped). gz resolves model:// URIs by having
+# GZ_SIM_RESOURCE_PATH point at this share dir (set by the launch / entrypoint),
+# which holds models/ and meshes/.
+cmake_minimum_required(VERSION 3.10)
+project(deepracer_simulation_environment NONE)
 
-cmake_minimum_required(VERSION 2.8.3)
-project(deepracer_simulation_environment)
+find_package(ament_cmake REQUIRED)
 
-find_package(catkin REQUIRED COMPONENTS
-             gazebo_ros
-             std_msgs
-             cv_bridge
-             sensor_msgs
-             image_transport
-             message_generation)
+# Resources under this package directory.
+install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
+install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
+install(DIRECTORY fonts/ DESTINATION share/${PROJECT_NAME}/fonts)
+install(DIRECTORY track_iconography/ DESTINATION share/${PROJECT_NAME}/track_iconography)
 
-catkin_python_setup()
+# Shared assets at the simulation/ root (siblings of src/). Mirrors the legacy
+# catkin install layout so downstream paths are unchanged.
+install(DIRECTORY ../../urdf/    DESTINATION share/${PROJECT_NAME}/urdf)
+install(DIRECTORY ../../worlds/  DESTINATION share/${PROJECT_NAME}/worlds)
+install(DIRECTORY ../../models/  DESTINATION share/${PROJECT_NAME}/models)
+install(DIRECTORY ../../meshes/  DESTINATION share/${PROJECT_NAME}/meshes)
+install(DIRECTORY ../../routes/  DESTINATION share/${PROJECT_NAME}/routes)
 
-add_message_files(FILES
-    AgentRewardData.msg
-)
-
-add_service_files(FILES
-    TopCamDataSrv.srv
-    VideoMetricsSrv.srv
-    VirtualEventVideoEditSrv.srv
-)
-
-# Generate added messages and services with any dependencies listed here
-generate_messages(DEPENDENCIES
-                  std_msgs
-                  sensor_msgs)
-
-
-catkin_package(CATKIN_DEPENDS
-               message_runtime
-               std_msgs
-               sensor_msgs
-               image_transport
-               cv_bridge)
-
-###########
-## Build ##
-###########
-
-include_directories(
-  ${catkin_INCLUDE_DIRS}
-)
-
-#############
-## Install ##
-#############
-
-install(PROGRAMS
-    scripts/only_sleep.sh
-    scripts/car_node.py
-    scripts/car_control_webrtc_msg_node.py
-    scripts/visualization_node.py
-    scripts/mp4_saving/agents_video_editor.py
-    scripts/test_fixture_nodes/camera_topic_node.py
-    tests/pytest_runner.py
-    DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-install(DIRECTORY launch/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
-)
-install(DIRECTORY config/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
-)
-install(DIRECTORY ../../meshes/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/meshes
-)
-install(DIRECTORY ../../models/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/models
-)
-install(DIRECTORY ../../urdf/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/urdf
-)
-install(DIRECTORY ../../worlds/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/worlds
-)
-install(DIRECTORY ../../routes/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/routes
-)
-install(DIRECTORY fonts/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/fonts
-)
-install(DIRECTORY track_iconography/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/track_iconography
-)
-install(DIRECTORY ../../track_iconography/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/track_iconography
-)
-install(DIRECTORY tests/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/tests
-)
-install(DIRECTORY tests/
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/tests
-)
-
-if(CATKIN_ENABLE_TESTING)
-  find_package(rostest REQUIRED)
-  add_rostest(tests/test_agents_video_editor.launch)
-endif()
+ament_package()

@@ -1,50 +1,65 @@
-FROM ros:noetic-robot
+# syntax=docker/dockerfile:1
+#################################################################################
+#  deepracer-env — Stage 1 of 3: BASE (substrate only, no DeepRacer logic)      #
+#                                                                               #
+#  ROS 2 Lyrical Luth (Ubuntu 26.04 "resolute") + Gazebo Jetty (gz-sim 10.x).   #
+#  Gazebo arrives via the ROS *vendor* packages from packages.ros.org           #
+#  (ros-lyrical-gz-sim-vendor, pulled transitively by ros-gz-sim) — we do NOT   #
+#  add the osrf gazebo apt list, which is the unsupported path on Lyrical.      #
+#                                                                               #
+#  This stage installs the simulation substrate (Jetty, ros2_control, the       #
+#  ros_gz bridge, simulation_interfaces) and the colcon/ament toolchain. It     #
+#  deliberately contains NO workspace sources: the DeepRacer packages are       #
+#  built in Dockerfile.build on top of this image. Keeping the substrate in a   #
+#  separate, rarely-changing layer makes the (frequent) workspace rebuild cheap.#
+#################################################################################
+FROM ros:lyrical-ros-base
 
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    ROS_DISTRO=lyrical
+
+# --- Substrate packages -------------------------------------------------------
+# Pinned-by-distro (apt) rather than by exact version: Lyrical is a single LTS
+# track, so "ros-lyrical-*" already pins the supported set. See the project
+# memory note "lyrical-jetty-substrate-verified" for the audited version table.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    sudo \
-    curl \
-    wget \
-    apt-utils \
-    git
+        # build toolchain
+        build-essential \
+        cmake \
+        git \
+        python3-colcon-common-extensions \
+        python3-pip \
+        python3-vcstool \
+        wget \
+        # Gazebo Jetty + the ROS<->gz bridge (vendor pkgs come in transitively)
+        ros-lyrical-ros-gz-sim \
+        ros-lyrical-ros-gz-bridge \
+        ros-lyrical-ros-gz-image \
+        ros-lyrical-ros-gz-interfaces \
+        # ros2_control + the Gazebo Sim hardware plugin (the drive stack)
+        ros-lyrical-gz-ros2-control \
+        ros-lyrical-ros2-control \
+        ros-lyrical-ros2-controllers \
+        # the simulator-agnostic sim-control standard (Route B core)
+        ros-lyrical-simulation-interfaces \
+        # robot description + sensor decode
+        ros-lyrical-xacro \
+        ros-lyrical-robot-state-publisher \
+        ros-lyrical-joint-state-publisher \
+        ros-lyrical-cv-bridge \
+        ros-lyrical-image-transport \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN curl -s https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | apt-key add -
+# rosdep ships pre-initialised in the base image; refresh for the Lyrical list
+# so Dockerfile.build's `rosdep install` over the ported workspace resolves.
+RUN rosdep update --rosdistro=${ROS_DISTRO} || true
 
-RUN sh -c 'echo "deb http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -sc) main" > /etc/apt/sources.list.d/gazebo-stable.list'
-RUN curl -s http://packages.osrfoundation.org/gazebo.key | apt-key add -
+# Headless render: gz-sim's GUI/sensors render through OGRE-next. Default to the
+# software GL path so `gz sim -s` (server) runs with no X server; the GUI used
+# for the demo recording is driven under xvfb in the runtime stage.
+ENV GZ_IP=127.0.0.1 \
+    LIBGL_ALWAYS_SOFTWARE=1
 
-ENV DEBIAN_FRONTEND="noninteractive" 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    gazebo11 \
-    libcurl4-openssl-dev \
-    libgazebo11-dev \
-    libignition-math4 \
-    libignition-math4-dev \
-    liblog4cplus-dev \
-    libx264-dev \
-    python \
-    python3 \
-    python3-colcon-common-extensions \
-    python3-jsonschema \
-    python3-pip \
-    python3-scipy \
-    python3-shapely \
-    ros-noetic-controller-manager \
-    ros-noetic-gazebo-plugins \
-    ros-noetic-gazebo-ros-control \
-    ros-noetic-ros-control \
-    ros-noetic-ros-controllers \
-    rviz \
-    x264 
-
-# Link AWS CPP libraries
-RUN ln -s /opt/ros/noetic/lib/libaws* /usr/local/lib/ && \
-    ln -s /opt/ros/noetic/include/aws /usr/local/include/ 
-
-COPY simulation/ /opt/bundle
-WORKDIR /opt/bundle
-
-RUN rosdep update --rosdistro=noetic && rosdep install --rosdistro=noetic --from-paths src --ignore-src -r -y 
-
-ADD docker/files/ml-code/simulation-entrypoint.sh /
-ENTRYPOINT ["/simulation-entrypoint.sh"]
 CMD ["bash"]

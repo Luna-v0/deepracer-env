@@ -1,0 +1,224 @@
+<?xml version="1.0"?>
+<!--
+  DeepRacer car for Gazebo Jetty (gz-sim 10) + ros2_control.
+
+  This is the modernised drive model for the ROS 2 Lyrical port. It keeps the
+  real car's joint geometry (extracted from the legacy
+  deepracer_single_cam_lidar.urdf: wheelbase ~0.164 m, track ~0.162 m, wheels
+  rolling about Y, steering hinges about Z, ±1 rad) and the real STL visuals,
+  but replaces the four classic-Gazebo couplings:
+
+    libgazebo_ros_control  -> gz_ros2_control::GazeboSimSystem + <ros2_control>
+    libgazebo_ros_camera   -> a gz-sim <sensor type="camera">  (bridged later)
+    libgazebo_ros_laser    -> a gz-sim <sensor type="gpu_lidar"> (bridged later)
+    classic ODE friction   -> <gazebo reference><mu1/mu2> (sdformat-native)
+
+  Args:
+    car_name    : entity / topic namespace (e.g. "car_0") — sensors publish to
+                  /<car_name>/camera/... and /<car_name>/scan.
+    friction_mu : wheel friction coefficient (domain-randomisation knob).
+    ros2_control_config : absolute path to ros2_control.yaml.
+    include_lidar : add the gpu_lidar sensor.
+-->
+<robot name="deepracer" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="car_name" default="car"/>
+  <xacro:arg name="friction_mu" default="1.5"/>
+  <xacro:arg name="ros2_control_config"
+             default="/opt/simapp/share/deepracer_simulation_environment/config/ros2_control.yaml"/>
+  <xacro:arg name="include_lidar" default="true"/>
+
+  <xacro:property name="car_name" value="$(arg car_name)"/>
+  <xacro:property name="mu" value="$(arg friction_mu)"/>
+  <xacro:property name="mesh" value="model://meshes/deepracer"/>
+
+  <!-- ============================ macros ============================ -->
+  <!-- A simple, physically-plausible inertia (small model car). -->
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertial>
+      <mass value="${m}"/>
+      <inertia ixx="${m*(y*y+z*z)/12}" iyy="${m*(x*x+z*z)/12}" izz="${m*(x*x+y*y)/12}"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </xacro:macro>
+
+  <xacro:macro name="wheel" params="name x y mesh_file">
+    <link name="${name}">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry><mesh filename="${mesh}/${mesh_file}"/></geometry>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+        <geometry><cylinder radius="0.033" length="0.02"/></geometry>
+      </collision>
+      <inertial>
+        <mass value="0.05"/>
+        <inertia ixx="2e-5" iyy="2e-5" izz="3e-5" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+    </link>
+    <gazebo reference="${name}">
+      <mu1>${mu}</mu1>
+      <mu2>${mu}</mu2>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ============================ links ============================ -->
+  <link name="base_link"/>
+
+  <link name="chassis">
+    <visual><geometry><mesh filename="${mesh}/chassis.STL"/></geometry></visual>
+    <collision>
+      <origin xyz="0 0 0.025" rpy="0 0 0"/>
+      <geometry><box size="0.25 0.16 0.05"/></geometry>
+    </collision>
+    <xacro:box_inertia m="1.5" x="0.25" y="0.16" z="0.05"/>
+  </link>
+  <joint name="base_link_joint" type="fixed">
+    <parent link="base_link"/><child link="chassis"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- rear wheels: driven (velocity), fixed to chassis, roll about Y -->
+  <xacro:wheel name="left_rear_wheel"  x="-0.081663" y="0.08105"  mesh_file="left_rear_wheel.STL"/>
+  <xacro:wheel name="right_rear_wheel" x="-0.081663" y="-0.08105" mesh_file="right_rear_wheel.STL"/>
+  <joint name="left_rear_wheel_joint" type="continuous">
+    <parent link="chassis"/><child link="left_rear_wheel"/>
+    <origin xyz="-0.081663 0.08105 0.01575" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    <limit effort="10" velocity="100"/>
+  </joint>
+  <joint name="right_rear_wheel_joint" type="continuous">
+    <parent link="chassis"/><child link="right_rear_wheel"/>
+    <origin xyz="-0.081663 -0.08105 0.01575" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    <limit effort="10" velocity="100"/>
+  </joint>
+
+  <!-- steering hinges: steered (position), about Z, ±1 rad -->
+  <link name="left_steering_hinge">
+    <visual><geometry><mesh filename="${mesh}/left_steering_hinge.STL"/></geometry></visual>
+    <inertial><mass value="0.01"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <link name="right_steering_hinge">
+    <visual><geometry><mesh filename="${mesh}/right_steering_hinge.STL"/></geometry></visual>
+    <inertial><mass value="0.01"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="left_steering_hinge_joint" type="continuous">
+    <parent link="chassis"/><child link="left_steering_hinge"/>
+    <origin xyz="0.082311 0.079601 0.011759" rpy="0 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="10" velocity="100"/>
+  </joint>
+  <joint name="right_steering_hinge_joint" type="continuous">
+    <parent link="chassis"/><child link="right_steering_hinge"/>
+    <origin xyz="0.082311 -0.079601 0.011759" rpy="0 0 0"/><axis xyz="0 0 1"/>
+    <limit lower="-1" upper="1" effort="10" velocity="100"/>
+  </joint>
+
+  <!-- front wheels: children of the steering hinges, roll about Y -->
+  <xacro:wheel name="left_front_wheel"  x="0" y="0" mesh_file="left_front_wheel.STL"/>
+  <xacro:wheel name="right_front_wheel" x="0" y="0" mesh_file="right_front_wheel.STL"/>
+  <joint name="left_front_wheel_joint" type="continuous">
+    <parent link="left_steering_hinge"/><child link="left_front_wheel"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    <limit effort="10" velocity="100"/>
+  </joint>
+  <joint name="right_front_wheel_joint" type="continuous">
+    <parent link="right_steering_hinge"/><child link="right_front_wheel"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 1 0"/>
+    <limit effort="10" velocity="100"/>
+  </joint>
+
+  <!-- camera + lidar mount links -->
+  <link name="camera_link">
+    <visual><geometry><mesh filename="${mesh}/zed_camera_link.STL"/></geometry></visual>
+    <inertial><mass value="0.03"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="camera_joint" type="fixed">
+    <parent link="chassis"/><child link="camera_link"/>
+    <origin xyz="0.05 0 0.10" rpy="0 0.15 0"/>
+  </joint>
+
+  <link name="laser">
+    <inertial><mass value="0.01"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
+  </link>
+  <joint name="laser_joint" type="fixed">
+    <parent link="chassis"/><child link="laser"/>
+    <origin xyz="0.0 0 0.12" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ===================== ros2_control wiring ===================== -->
+  <ros2_control name="GazeboSimSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+    <!-- four wheels: velocity command -->
+    <xacro:macro name="vel_joint" params="name">
+      <joint name="${name}">
+        <command_interface name="velocity"/>
+        <state_interface name="position"/>
+        <state_interface name="velocity"/>
+      </joint>
+    </xacro:macro>
+    <xacro:vel_joint name="left_rear_wheel_joint"/>
+    <xacro:vel_joint name="right_rear_wheel_joint"/>
+    <xacro:vel_joint name="left_front_wheel_joint"/>
+    <xacro:vel_joint name="right_front_wheel_joint"/>
+    <!-- two steering hinges: position command -->
+    <joint name="left_steering_hinge_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="right_steering_hinge_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <!-- ============== gz system + sensor plugins ============== -->
+  <gazebo>
+    <!-- The gz-sim SYSTEM plugin (drives the controller_manager inside gz). Note
+         the class is GazeboSimROS2ControlPlugin; gz_ros2_control/GazeboSimSystem
+         above is the ros2_control HARDWARE plugin, a different thing. -->
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(arg ros2_control_config)</parameters>
+    </plugin>
+  </gazebo>
+
+  <gazebo reference="camera_link">
+    <sensor name="zed_camera" type="camera">
+      <topic>${car_name}/camera/zed/rgb/image_rect_color</topic>
+      <gz_frame_id>camera_link</gz_frame_id>
+      <update_rate>15</update_rate>
+      <always_on>1</always_on>
+      <camera>
+        <horizontal_fov>1.13</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.02</near><far>300</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <xacro:if value="$(arg include_lidar)">
+    <gazebo reference="laser">
+      <sensor name="lidar" type="gpu_lidar">
+        <topic>${car_name}/scan</topic>
+        <gz_frame_id>laser</gz_frame_id>
+        <update_rate>10</update_rate>
+        <always_on>1</always_on>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>64</samples>
+              <resolution>1</resolution>
+              <min_angle>-2.61799</min_angle>
+              <max_angle>2.61799</max_angle>
+            </horizontal>
+          </scan>
+          <range><min>0.15</min><max>12.0</max><resolution>0.01</resolution></range>
+        </lidar>
+      </sensor>
+    </gazebo>
+  </xacro:if>
+
+</robot>
