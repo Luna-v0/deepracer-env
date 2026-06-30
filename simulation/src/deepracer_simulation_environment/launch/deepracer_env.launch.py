@@ -41,6 +41,7 @@ from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 PKG = "deepracer_simulation_environment"
@@ -98,7 +99,10 @@ def generate_launch_description() -> LaunchDescription:
     rsp = Node(
         package="robot_state_publisher", executable="robot_state_publisher",
         output="screen",
-        parameters=[{"robot_description": robot_description, "use_sim_time": True}],
+        # Wrap as a string parameter: a bare Command() substitution is parsed as
+        # YAML, and the URDF XML fails that parse ("Unable to parse ... as yaml").
+        parameters=[{"robot_description": ParameterValue(robot_description, value_type=str),
+                     "use_sim_time": True}],
     )
 
     # 3. Spawn the car from /robot_description.
