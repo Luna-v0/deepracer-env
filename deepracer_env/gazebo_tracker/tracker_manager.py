@@ -1,43 +1,44 @@
 #################################################################################
 #   Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.          #
-#                                                                               #
 #   Licensed under the Apache License, Version 2.0 (the "License").             #
-#   You may not use this file except in compliance with the License.            #
-#   You may obtain a copy of the License at                                     #
-#                                                                               #
-#       http://www.apache.org/licenses/LICENSE-2.0                              #
-#                                                                               #
-#   Unless required by applicable law or agreed to in writing, software         #
-#   distributed under the License is distributed on an "AS IS" BASIS,           #
-#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.    #
-#   See the License for the specific language governing permissions and         #
-#   limitations under the License.                                              #
 #################################################################################
+"""Clock-driven tracker dispatch, ported to rclpy.
 
-import threading
+Unchanged design: a singleton that, on every ``/clock`` tick, calls
+``update_tracker(delta_time, sim_time)`` on registered trackers in priority order
+(HIGH reads before LOW writes). Only the clock source changes — a ``rclpy``
+subscription on the shared node (``/clock`` bridged from gz via ros_gz) replaces
+the ``rospy.Subscriber``.
+"""
 import logging
+import threading
+
 from rosgraph_msgs.msg import Clock
-import rospy
+
 from deepracer_env.log_handler.deepracer_exceptions import GenericRolloutException
-from deepracer_env.log_handler.exception_handler import log_and_exit
-from deepracer_env.log_handler.constants import (SIMAPP_SIMULATION_WORKER_EXCEPTION,
-                                          SIMAPP_EVENT_ERROR_CODE_500)
 import deepracer_env.gazebo_tracker.constants as consts
 from deepracer_env.log_handler.logger import Logger
-
 
 logger = Logger(__name__, logging.INFO).get_logger()
 
 
+def _clock_seconds(sim_time) -> float:
+    """Seconds from a rosgraph_msgs/Clock, tolerant of ROS1/ROS2 field names."""
+    clk = sim_time.clock
+    secs = getattr(clk, "sec", None)
+    if secs is None:  # ROS 1 names (defensive)
+        return clk.secs + 1.0e-9 * clk.nsecs
+    return secs + 1.0e-9 * clk.nanosec
+
+
 class TrackerManager(object):
-    """
-    TrackerManager class
-    """
+    """Dispatches ``update_tracker`` to registered trackers on each clock tick."""
+
     _instance_ = None
 
     @staticmethod
     def get_instance():
-        """Method for getting a reference to the Tracker Manager object"""
+        """Return the singleton, constructing it on first use."""
         if TrackerManager._instance_ is None:
             TrackerManager()
         return TrackerManager._instance_
@@ -45,59 +46,48 @@ class TrackerManager(object):
     def __init__(self):
         if TrackerManager._instance_ is not None:
             raise GenericRolloutException("Attempting to construct multiple TrackerManager")
-        self.priority_order = [consts.TrackerPriority.HIGH, consts.TrackerPriority.NORMAL, consts.TrackerPriority.LOW]
-        self.tracker_map = {}
-        for priority in self.priority_order:
-            self.tracker_map[priority] = set()
+        self.priority_order = [consts.TrackerPriority.HIGH,
+                               consts.TrackerPriority.NORMAL,
+                               consts.TrackerPriority.LOW]
+        self.tracker_map = {priority: set() for priority in self.priority_order}
         self.lock = threading.RLock()
         self.last_time = 0.0
-        rospy.Subscriber('/clock', Clock, self._update_sim_time)
+        # Subscribe on the shared node; /clock is bridged from gz (use_sim_time).
+        from deepracer_env.runtime import get_node
+        self._node = get_node()
+        self._sub = self._node.create_subscription(Clock, "/clock", self._update_sim_time, 10)
         TrackerManager._instance_ = self
 
     def add(self, tracker, priority=consts.TrackerPriority.NORMAL):
-        """
-        Add given tracker to manager
-
-        Args:
-            tracker (AbstractTracker): tracker object
-            priority (TrackerPriority): prioirity
-        """
+        """Register *tracker* under *priority*."""
         with self.lock:
             self.tracker_map[priority].add(tracker)
 
     def remove(self, tracker):
-        """
-        Remove given tracker from manager
-
-        Args:
-            tracker (AbstractTracker): tracker
-        """
+        """Unregister *tracker* from all priorities."""
         with self.lock:
             for priority in self.priority_order:
                 self.tracker_map[priority].discard(tracker)
 
     def _update_sim_time(self, sim_time):
-        """
-        Callback when sim time is updated
-
-        Args:
-            sim_time (Clock): simulation time
-        """
-        curr_time = sim_time.clock.secs + 1.e-9 * sim_time.clock.nsecs
+        """Clock callback: dispatch update_tracker in priority order."""
+        curr_time = _clock_seconds(sim_time)
         if self.last_time is None:
             self.last_time = curr_time
         delta_time = curr_time - self.last_time
-        lock_acquired = self.lock.acquire(False)
-        if lock_acquired:
-            try:
-                self.last_time = curr_time
-                for priority in self.priority_order:
-                    copy_trackers = self.tracker_map[priority].copy()
-                    for tracker in copy_trackers:
-                        tracker.update_tracker(delta_time, sim_time)
-            except Exception as e:
-                logger.info("TrackerManager: failed _update_sim_time call")
-            finally:
-                self.lock.release()
-        else:
+        if not self.lock.acquire(False):
             logger.info("TrackerManager: missed an _update_sim_time call")
+            return
+        try:
+            self.last_time = curr_time
+            for priority in self.priority_order:
+                for tracker in self.tracker_map[priority].copy():
+                    # Isolate each tracker: one failure must not starve the
+                    # others (e.g. the pose-refresh tracker) on this tick.
+                    try:
+                        tracker.update_tracker(delta_time, sim_time)
+                    except Exception as ex:  # noqa: BLE001
+                        logger.info("TrackerManager: %s.update_tracker failed: %s",
+                                    type(tracker).__name__, ex)
+        finally:
+            self.lock.release()

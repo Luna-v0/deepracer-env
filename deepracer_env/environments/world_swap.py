@@ -5,7 +5,8 @@ currently-rendered track mesh and spawning a different one, without
 restarting the ``gzserver`` process. It is deliberately free of any
 :class:`~deepracer_env.track_geom.track_data.TrackData` / controller logic
 — that bookkeeping lives in :meth:`DeepRacerEnv.set_world` — so this class
-stays a thin, testable wrapper over the standard ``gazebo_ros`` services.
+stays a thin, testable wrapper over the simulator seam
+(:func:`deepracer_env.runtime.get_sim_control`).
 
 Why spawn via an ``<include>`` wrapper instead of a model SDF path
 -----------------------------------------------------------------
@@ -28,24 +29,32 @@ filename inconsistencies never matter. For multi-include worlds (e.g.
 ``reinvent_base_jeremiah`` loads ``reinvent_lines_walls`` +
 ``reinvent_grass_asphalt``) we parse the target ``.world`` and replay every
 non-``sun`` / non-``ground_plane`` ``<include>`` verbatim.
+
+Mechanism note (ROS 2 / seam port)
+----------------------------------
+The original ROS 1 implementation talked to ``gazebo_ros`` directly through
+``rospy.ServiceProxy`` for ``SpawnModel`` / ``DeleteModel`` /
+``GetWorldProperties``. That plumbing has been replaced by the shared
+:class:`~deepracer_env.sim_control.interface.SimControl` seam:
+``spawn_entity`` / ``delete_entity`` / ``list_entities``. The seam already
+distinguishes "the simulator died" (:class:`SimControlDead`) from "the call
+was rejected" (:class:`SimControlError`), which is exactly the
+intermittent-gzserver-segfault case this class must turn into a clean,
+catchable :class:`WorldSwapError`.
 '''
 import logging
 import os
 import time
 import xml.etree.ElementTree as ET
 
-import rospkg
-import rospy
-from gazebo_msgs.srv import (
-    SpawnModel, DeleteModel, GetWorldProperties,
-)
-from geometry_msgs.msg import Pose
+from ament_index_python.packages import get_package_share_directory
+
+from deepracer_env.runtime import get_sim_control
+from deepracer_env.sim_control.interface import SimControlError, SimControlDead
+from deepracer_env.sim_control.types import Pose, IDENTITY_POSE
 
 from deepracer_env.log_handler.logger import Logger
-from deepracer_env.track_geom.constants import (
-    SPAWN_SDF_MODEL, DELETE_MODEL, GET_WORLD_PROPERTIES,
-    RACETRACK_MODEL_NAME,
-)
+from deepracer_env.track_geom.constants import RACETRACK_MODEL_NAME
 
 LOG = Logger(__name__, logging.INFO).get_logger()
 
@@ -57,7 +66,7 @@ class WorldSwapError(RuntimeError):
     importantly when ``gzserver`` dies mid-swap (an intermittent Gazebo
     segfault on ``delete_model`` of a mesh model). Callers that loop swaps
     (training rotation) should catch this, checkpoint, and restart the sim
-    container rather than spinning on a dead ROS master.'''
+    container rather than spinning on a dead simulator.'''
 
 # Includes that are part of the scene scaffolding, not the track itself.
 _NON_TRACK_INCLUDE_MODELS = ("sun", "ground_plane")
@@ -66,19 +75,19 @@ _NON_TRACK_INCLUDE_MODELS = ("sun", "ground_plane")
 class WorldSwapper(object):
     '''Deletes the live track mesh and spawns a different one in-place.
 
-    One instance is created lazily by :class:`DeepRacerEnv`. All Gazebo
-    service proxies are created on first use so importing this module never
-    requires a live ROS graph.
+    One instance is created lazily by :class:`DeepRacerEnv`. The shared
+    :class:`~deepracer_env.sim_control.interface.SimControl` handle is fetched
+    on first use so importing this module never requires a live ROS graph.
     '''
 
     def __init__(self):
-        self._spawn_srv = None
-        self._delete_srv = None
-        self._world_props_srv = None
-        rospack = rospkg.RosPack()
+        # The sim-control handle is resolved lazily (see :meth:`_sim`) so that
+        # constructing a WorldSwapper never spins up a simulator connection.
+        self._sim_control = None
         # routes/, models/ and worlds/ are all installed under the package
-        # share dir (see simulation/.../CMakeLists.txt).
-        self._pkg_path = rospack.get_path(_SIM_PKG)
+        # share dir (see simulation/.../CMakeLists.txt). ROS 2's ament index
+        # replaces ROS 1's ``rospkg.RosPack().get_path(...)``.
+        self._pkg_path = get_package_share_directory(_SIM_PKG)
 
     # ------------------------------------------------------------------
     # Path / validation helpers
@@ -112,42 +121,37 @@ class WorldSwapper(object):
                     world_name, model_dir))
 
     # ------------------------------------------------------------------
-    # Gazebo service plumbing
+    # Simulator seam plumbing
     # ------------------------------------------------------------------
 
-    def _ensure_services(self):
-        # Plain ServiceProxy (NOT ServiceProxyWrapper): a swap must fail fast
-        # and raise a catchable error if gzserver dies. The wrapper retries 5×
-        # then sleeps ROBOMAKER_CANCEL_JOB_WAIT_TIME (5 min) and exits the
-        # process — exactly wrong when a looped caller wants to recover.
-        if self._spawn_srv is None:
-            rospy.wait_for_service(SPAWN_SDF_MODEL, timeout=30.0)
-            self._spawn_srv = rospy.ServiceProxy(SPAWN_SDF_MODEL, SpawnModel)
-        if self._delete_srv is None:
-            rospy.wait_for_service(DELETE_MODEL, timeout=30.0)
-            self._delete_srv = rospy.ServiceProxy(DELETE_MODEL, DeleteModel)
-        if self._world_props_srv is None:
-            rospy.wait_for_service(GET_WORLD_PROPERTIES, timeout=30.0)
-            self._world_props_srv = rospy.ServiceProxy(
-                GET_WORLD_PROPERTIES, GetWorldProperties)
+    def _sim(self):
+        '''Return the shared :class:`SimControl`, resolving it on first use.
+
+        Replaces the ROS 1 ``_ensure_services`` lazy-``ServiceProxy`` dance.
+        The seam itself is the fail-fast equivalent of a plain ``ServiceProxy``
+        (NOT the retry-then-exit ``ServiceProxyWrapper``): a dead simulator
+        surfaces as a catchable :class:`SimControlDead`, which a looped caller
+        wants so it can recover instead of hanging.'''
+        if self._sim_control is None:
+            self._sim_control = get_sim_control()
+        return self._sim_control
 
     def gazebo_alive(self, timeout=3.0):
-        '''Return True iff gzserver still answers a service call.
+        '''Return True iff the simulator still answers a query.
 
         Used to turn an intermittent gzserver segfault during a swap into a
-        clean, catchable :class:`WorldSwapError` instead of a 30×
-        "unable to contact master" retry storm.'''
+        clean, catchable :class:`WorldSwapError` instead of a retry storm. The
+        *timeout* arg is kept for API compatibility; liveness is now probed by
+        attempting a single ``list_entities()`` through the seam.'''
         try:
-            rospy.wait_for_service(GET_WORLD_PROPERTIES, timeout=timeout)
-            rospy.ServiceProxy(GET_WORLD_PROPERTIES, GetWorldProperties)()
+            self._sim().list_entities()
             return True
         except Exception:  # noqa: BLE001
             return False
 
     def current_model_names(self):
         '''Return the list of model names currently present in Gazebo.'''
-        self._ensure_services()
-        return list(self._world_props_srv().model_names)
+        return list(self._sim().list_entities())
 
     def _track_model_names(self):
         '''Names of the live track model(s) — anything named ``racetrack``
@@ -211,29 +215,32 @@ class WorldSwapper(object):
     def delete_track(self):
         '''Delete every live track model, then confirm it is gone.
 
-        Raises :class:`WorldSwapError` if gzserver dies during the delete (the
-        intermittent Gazebo segfault on mesh ``delete_model``) so the caller
-        can recover instead of hanging on a dead master.'''
-        self._ensure_services()
+        Raises :class:`WorldSwapError` if the simulator dies during the delete
+        (the intermittent Gazebo segfault on mesh ``delete_model``, surfaced by
+        the seam as :class:`SimControlDead`) so the caller can recover instead
+        of hanging on a dead simulator.'''
         deleted = []
         for name in self._track_model_names():
             try:
-                resp = self._delete_srv(name)
-                if getattr(resp, "success", True):
+                if self._sim().delete_entity(name):
                     deleted.append(name)
                 else:
-                    LOG.warning("delete_model(%s) reported failure: %s",
-                                name, getattr(resp, "status_message", ""))
-            except Exception as ex:  # noqa: BLE001
-                # A raised delete is the classic symptom of gzserver
-                # segfaulting on a mesh delete. Distinguish "gazebo is dead"
-                # (unrecoverable) from a transient hiccup.
+                    LOG.warning("delete_entity(%s) reported failure", name)
+            except SimControlDead as ex:
+                # The classic symptom of gzserver segfaulting on a mesh delete:
+                # the seam reports the simulator is gone. Unrecoverable.
+                raise WorldSwapError(
+                    "gzserver died while deleting track model {!r} "
+                    "(intermittent Gazebo segfault on delete_model): "
+                    "{}".format(name, ex))
+            except SimControlError as ex:
+                # The call was rejected but the simulator may still be alive;
+                # double-check liveness before deciding this is fatal.
                 if not self.gazebo_alive():
                     raise WorldSwapError(
-                        "gzserver died while deleting track model {!r} "
-                        "(intermittent Gazebo segfault on delete_model): "
+                        "gzserver died while deleting track model {!r}: "
                         "{}".format(name, ex))
-                LOG.warning("delete_model(%s) raised but gazebo alive: %s",
+                LOG.warning("delete_entity(%s) raised but gazebo alive: %s",
                             name, ex)
         # The old track must be fully gone before a same-named 'racetrack' is
         # spawned — a lingering duplicate corrupts Gazebo's model list.
@@ -245,29 +252,22 @@ class WorldSwapper(object):
 
     def spawn_track(self, world_name):
         '''Spawn *world_name*'s track mesh via the include-wrapper SDF.'''
-        self._ensure_services()
         sdf = self._include_sdf(world_name)
         # Tracks are authored at the world origin; the <include> blocks carry
         # their own relative <pose> tags, so spawn the model root at identity.
-        # (rospy serialisation rejects a None Pose, hence an explicit one.)
         try:
-            resp = self._spawn_srv(
-                RACETRACK_MODEL_NAME,   # model_name
-                sdf,                    # model_xml
-                '',                     # robot_namespace
-                Pose(),                 # initial_pose (identity; SDF carries poses)
-                '',                     # reference_frame
+            self._sim().spawn_entity(
+                RACETRACK_MODEL_NAME,   # name
+                sdf,                    # sdf (identity root; SDF carries poses)
+                pose=IDENTITY_POSE,
             )
-        except Exception as ex:  # noqa: BLE001
-            if not self.gazebo_alive():
-                raise WorldSwapError(
-                    "gzserver died while spawning track for world {!r}: "
-                    "{}".format(world_name, ex))
-            raise
-        if not getattr(resp, "success", True):
+        except SimControlDead as ex:
+            raise WorldSwapError(
+                "gzserver died while spawning track for world {!r}: "
+                "{}".format(world_name, ex))
+        except SimControlError as ex:
             raise RuntimeError(
-                "spawn_sdf_model for world {!r} failed: {}".format(
-                    world_name, getattr(resp, "status_message", "")))
+                "spawn for world {!r} failed: {}".format(world_name, ex))
         LOG.info("WorldSwapper spawned track for world %r", world_name)
 
     def spawn_track_instance(self, world_name, model_name, offset=(0.0, 0.0)):
@@ -276,10 +276,9 @@ class WorldSwapper(object):
         Each car drives its own track copy far from the others, so cars never see
         or collide with each other. The TrackData for that car is shifted by the
         same offset (``TrackData.create(world_name, offset)``).'''
-        self._ensure_services()
         # The offset MUST go inside the <include>'s <pose> — the include carries
-        # the track's own (origin) pose, which overrides the spawn service's
-        # initial_pose, so passing the offset there alone leaves the mesh at 0,0.
+        # the track's own (origin) pose, which overrides the spawn pose, so
+        # passing the offset there alone leaves the mesh at 0,0.
         ox, oy = float(offset[0]), float(offset[1])
         sdf = (
             '<?xml version="1.0"?>\n<sdf version="1.6">\n'
@@ -288,19 +287,15 @@ class WorldSwapper(object):
             '    <name>{}</name>\n'
             '    <pose>{} {} 0 0 0 0</pose>\n'
             '  </include>\n</sdf>\n'.format(world_name, model_name, ox, oy))
-        pose = Pose()
-        pose.position.x = ox
-        pose.position.y = oy
         try:
-            resp = self._spawn_srv(model_name, sdf, '', pose, '')
-        except Exception as ex:  # noqa: BLE001
-            if not self.gazebo_alive():
-                raise WorldSwapError(
-                    "gzserver died while spawning track instance {!r}: {}".format(model_name, ex))
-            raise
-        if not getattr(resp, "success", True):
+            self._sim().spawn_entity(model_name, sdf, pose=Pose.at(ox, oy))
+        except SimControlDead as ex:
+            raise WorldSwapError(
+                "gzserver died while spawning track instance {!r}: {}".format(
+                    model_name, ex))
+        except SimControlError as ex:
             raise RuntimeError("spawn track instance {!r} failed: {}".format(
-                model_name, getattr(resp, "status_message", "")))
+                model_name, ex))
         LOG.info("WorldSwapper spawned track instance %r at offset %s", model_name, offset)
 
     def confirm_track_present(self, timeout=10.0):

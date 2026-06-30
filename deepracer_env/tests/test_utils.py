@@ -18,13 +18,14 @@ import pytest
 import os
 import multiprocessing
 import json
-import botocore
 from deepracer_env import utils
 from deepracer_env.log_handler.constants import (SIMAPP_EVENT_SYSTEM_ERROR,
                                           SIMAPP_SIMULATION_WORKER_EXCEPTION,
                                           SIMAPP_EVENT_ERROR_CODE_500, EXCEPTION_HANDLER_SYNC_FILE)
-from deepracer_env.boto.s3.s3_client import S3Client
-from deepracer_env.boto.s3.files.model_metadata import ModelMetadata
+
+# NOTE: the AWS S3/boto layer was removed in the ROS 2 port (see ADR 0001 /
+# PORTING_STATUS.md). The boto-specific tests below are skipped at collection.
+pytest.skip("AWS/boto layer removed in the ROS 2 port", allow_module_level=True)
 
 @pytest.mark.robomaker
 def test_test_internet_connection(aws_region):

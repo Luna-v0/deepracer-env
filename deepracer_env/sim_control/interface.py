@@ -234,6 +234,24 @@ class SimControl(abc.ABC):
 
     # -- time control ----------------------------------------------------------
 
+    def refresh_state(self, force: bool = False) -> None:
+        """Refresh any internal pose/state cache (one batched read).
+
+        Backends that batch entity-state reads (the ``ros_gz`` backend snapshots
+        ``/world/<w>/pose/info`` once per call) override this; the tracker layer
+        calls it from the simulation-clock callback so subsequent
+        ``get_entity_state`` reads are cheap and consistent.
+
+        Args:
+            force: Bypass any rate-limiting and refresh immediately (used for the
+                blocking reads a reset depends on). When ``False`` the backend
+                may throttle: the gz ``/clock`` ticks far faster than a CLI
+                snapshot can run, so an unthrottled per-tick refresh would spawn
+                a subprocess storm.
+
+        The default is a no-op (backends that read per-entity live need no cache).
+        """
+
     @abc.abstractmethod
     def step(self, n: int = 1) -> None:
         """Advance the simulation by *n* steps and block until they complete.

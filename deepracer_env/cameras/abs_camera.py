@@ -15,16 +15,23 @@
 #################################################################################
 
 import abc
+import logging
 import threading
 
 from deepracer_env.log_handler.deepracer_exceptions import GenericRolloutException
-from deepracer_env.rospy_wrappers import ServiceProxyWrapper
-from deepracer_env.track_geom.constants import SPAWN_SDF_MODEL
+from deepracer_env.log_handler.logger import Logger
 from deepracer_env.cameras.camera_manager import CameraManager
-from gazebo_msgs.srv import SpawnModel
+# ROS 2 port: the ``/gazebo/spawn_sdf_model`` ServiceProxy (ServiceProxyWrapper +
+# gazebo_msgs/SpawnModel) is replaced by the shared SimControl seam. These
+# cameras are cosmetic spectator/follow cameras, so spawning is best-effort —
+# any failure is swallowed so it can never break the controller's reset/step.
+from deepracer_env.runtime import get_sim_control
+from deepracer_env.sim_control.compat import ros_to_seam_pose
 
 # Python 2 and 3 compatible Abstract class
 ABC = abc.ABCMeta('ABC', (object,), {})
+
+LOG = Logger(__name__, logging.INFO).get_logger()
 
 
 class AbstractCamera(ABC):
@@ -39,7 +46,8 @@ class AbstractCamera(ABC):
         self._namespace = namespace or 'default'
         self.lock = threading.Lock()
         self.is_reset_called = False
-        self.spawn_sdf_model = ServiceProxyWrapper(SPAWN_SDF_MODEL, SpawnModel)
+        # Guard so a failed (best-effort) spawn only logs once per camera.
+        self._spawn_failed_logged = False
         CameraManager.get_instance().add(self, namespace)
 
     @property
@@ -84,13 +92,28 @@ class AbstractCamera(ABC):
         """
         Spawns a sdf model located in the given path
 
+        ROS 2 port: replaces the ``/gazebo/spawn_sdf_model`` ServiceProxy call
+        with ``SimControl.spawn_entity`` via the shared backend. The camera pose
+        is a ``geometry_msgs/Pose`` (still valid on ROS 2), converted to a seam
+        ``Pose`` at the boundary. Wrapped in try/except: a cosmetic spectator
+        camera must never break the controller's reset/step path.
+
         Args:
             car_pose (Pose): Pose of car
             camera_sdf_path (string): full path to the location of sdf file
         """
-        camera_sdf = self._get_sdf_string(camera_sdf_path)
-        camera_pose = self._get_initial_camera_pose(car_pose)
-        self.spawn_sdf_model(self.model_name, camera_sdf, self.model_name, camera_pose, '')
+        try:
+            camera_sdf = self._get_sdf_string(camera_sdf_path)
+            camera_pose = self._get_initial_camera_pose(car_pose)
+            get_sim_control().spawn_entity(
+                self.model_name, camera_sdf,
+                pose=ros_to_seam_pose(camera_pose),
+                allow_renaming=False)
+        except Exception as ex:  # noqa: BLE001 — cosmetic camera, spawn is best-effort
+            if not self._spawn_failed_logged:
+                LOG.info("[AbstractCamera]: spawn of cosmetic camera '%s' "
+                         "failed (no-op): %s", self.model_name, ex)
+                self._spawn_failed_logged = True
 
     def update_pose(self, car_pose, delta_time):
         """

@@ -36,13 +36,8 @@ from deepracer_env.log_handler.constants import (SIMAPP_ENVIRONMENT_EXCEPTION,
 from deepracer_env.log_handler.logger import Logger
 from deepracer_env.log_handler.exception_handler import log_and_exit, simapp_exit_gracefully
 from deepracer_env.log_handler.deepracer_exceptions import GenericException
-from deepracer_env.constants import (NUM_RETRIES, CONNECT_TIMEOUT,
-                              ROBOMAKER_S3_KMS_CMK_ARN, S3_KMS_CMK_ARN_ENV,
-                              S3KmsEncryption, DEEPRACER_JOB_TYPE_ENV,
+from deepracer_env.constants import (DEEPRACER_JOB_TYPE_ENV,
                               DeepRacerJobType)
-import boto3
-import botocore
-from deepracer_env.boto.s3.s3_client import S3Client
 
 logger = Logger(__name__, logging.INFO).get_logger()
 
@@ -67,10 +62,6 @@ def force_list(val):
     if type(val) is not list:
         val = [val]
     return val
-
-def get_boto_config():
-    '''Returns a botocore config object which specifies the number of times to retry'''
-    return botocore.config.Config(retries=dict(max_attempts=NUM_RETRIES), connect_timeout=CONNECT_TIMEOUT)
 
 def str2bool(flag):
     """ bool: convert flag to boolean if it is string and return it else return its initial bool value """
@@ -148,19 +139,15 @@ def get_video_display_name():
     Returns:
         list: List of the display name. In head2head there would be two values else one value.
     """
-    #
-    # The import rospy statement is here because ROS may not be installed in all environments.
-    # Also the rollout_utils.py fails because its PhaseObserver is python3 compatable and not python2.7 because of
-    # def __init__(self, topic: str, sink: RunPhaseSubject) -> None:
-    #
-    import rospy
-    video_job_type = rospy.get_param("VIDEO_JOB_TYPE", "")
+    # Note: under ROS 2 there is no global param server; these job parameters are
+    # read from environment variables instead of rospy.get_param.
+    video_job_type = os.environ.get("VIDEO_JOB_TYPE", "")
     # TODO: This code should be removed when the cloud service starts providing VIDEO_JOB_TYPE YAML parameter
     if not video_job_type:
-        return force_list(rospy.get_param("DISPLAY_NAME", ""))
+        return force_list(os.environ.get("DISPLAY_NAME", ""))
     if video_job_type == "RACING":
-        return force_list(rospy.get_param("RACER_NAME", ""))
-    return force_list(rospy.get_param("MODEL_NAME", ""))
+        return force_list(os.environ.get("RACER_NAME", ""))
+    return force_list(os.environ.get("MODEL_NAME", ""))
 
 def get_racecar_names(racecar_num):
     """Return the racer names based on the number of racecars given.
@@ -191,75 +178,6 @@ def get_racecar_idx(racecar_name):
                      SIMAPP_SIMULATION_WORKER_EXCEPTION,
                      SIMAPP_EVENT_ERROR_CODE_500)
 
-
-def get_s3_extra_args(s3_kms_cmk_arn=None):
-    """Generate the s3 extra arg dict with the s3 kms cmk arn passed in.
-
-    Args:
-        s3_kms_cmk_arn (str, optional): The kms arn to use for contructing
-                                        the s3 extra arguments.
-                                        Defaults to None.
-
-    Returns:
-        dict: A dictionary for s3 extra arguments.
-    """
-    s3_extra_args = {S3KmsEncryption.ACL.value: S3KmsEncryption.BUCKET_OWNER_FULL_CONTROL.value}
-    if s3_kms_cmk_arn is not None:
-        s3_extra_args[S3KmsEncryption.SERVER_SIDE_ENCRYPTION.value] = S3KmsEncryption.AWS_KMS.value
-        s3_extra_args[S3KmsEncryption.SSE_KMS_KEY_ID.value] = s3_kms_cmk_arn
-    return s3_extra_args
-
-
-def get_s3_kms_extra_args():
-    """Return extra args for S3 uploads using KMS encryption if a KMS key is configured.
-
-    Returns:
-        dict: With the kms encryption arn if configured, else empty dict
-    """
-    s3_kms_cmk_arn = os.environ.get(S3_KMS_CMK_ARN_ENV, None)
-    if not s3_kms_cmk_arn:
-        try:
-            import rospy
-            s3_kms_cmk_arn = rospy.get_param(ROBOMAKER_S3_KMS_CMK_ARN, None)
-        except Exception:
-            pass
-    return get_s3_extra_args(s3_kms_cmk_arn)
-
-def test_internet_connection(aws_region):
-    """
-    Recently came across faults because of old VPC stacks trying to use the deepracer service.
-    When tried to download the model_metadata.json. The s3 fails with connection time out.
-    To avoid this and give the user proper message, having this logic.
-    """
-    try:
-        session = boto3.session.Session()
-        ec2_client = session.client('ec2', aws_region)
-        logger.info('Checking internet connection...')
-        response = ec2_client.describe_vpcs()
-        if not response['Vpcs']:
-            log_and_exit("No VPC attached to instance",
-                         SIMAPP_ENVIRONMENT_EXCEPTION,
-                         SIMAPP_EVENT_ERROR_CODE_500)
-        logger.info('Verified internet connection')
-    except botocore.exceptions.EndpointConnectionError:
-        log_and_exit("No Internet connection or ec2 service unavailable",
-                     SIMAPP_ENVIRONMENT_EXCEPTION,
-                     SIMAPP_EVENT_ERROR_CODE_500)
-    except botocore.exceptions.ClientError as ex:
-        log_and_exit("Issue with your current VPC stack and IAM roles.\
-                      You might need to reset your account resources: {}".format(ex),
-                     SIMAPP_ENVIRONMENT_EXCEPTION,
-                     SIMAPP_EVENT_ERROR_CODE_500)
-    except botocore.exceptions.ConnectTimeoutError as ex:
-        log_and_exit("Issue with your current VPC stack and IAM roles.\
-                      You might need to reset your account resources: {}".format(ex),
-                     SIMAPP_ENVIRONMENT_EXCEPTION,
-                     SIMAPP_EVENT_ERROR_CODE_500)
-    except Exception as ex:
-        log_and_exit("Issue with your current VPC stack and IAM roles.\
-                      You might need to reset your account resources: {}".format(ex),
-                     SIMAPP_ENVIRONMENT_EXCEPTION,
-                     SIMAPP_EVENT_ERROR_CODE_500)
 
 def check_is_sageonly():
     """Checks if current environment is SageOnly environment
@@ -384,7 +302,7 @@ class Profiler(object):
                 raise GenericException('Profiler is in use!')
 
     def stop(self):
-        """ Stop the profiler and upload the data to S3 """
+        """ Stop the profiler and persist the data locally """
         if self._profiler_owner == self:
             if self._profiler:
                 self._profiler.disable()
@@ -400,24 +318,13 @@ class Profiler(object):
             self._profiler_owner = None
 
     def _upload_profile_stats_to_s3(self, s3_file_name):
-        """ Upload the profiler information to s3 bucket
+        """ Persist the profiler information locally.
+
+        S3 upload has been removed; the profiler stats file produced by ``stop`` is
+        simply left in place on the local filesystem instead of being uploaded to a
+        bucket. Kept as a method for API compatibility.
 
         Arguments:
-            s3_file_name (str): File name of the profiler in S3
+            s3_file_name (str): File name of the local profiler stats file.
         """
-        try:
-            session = boto3.Session()
-            s3_client = session.client('s3', config=get_boto_config())
-            s3_extra_args = get_s3_kms_extra_args()
-            s3_client.upload_file(Filename=s3_file_name, Bucket=self.s3_bucket,
-                                  Key=os.path.join(self.s3_prefix, s3_file_name),
-                                  ExtraArgs=s3_extra_args)
-        except botocore.exceptions.ClientError as ex:
-            log_and_exit("Unable to upload profiler data: {}, {}".format(self.s3_prefix,
-                                                                         ex.response['Error']['Code']),
-                         SIMAPP_SIMULATION_WORKER_EXCEPTION,
-                         SIMAPP_EVENT_ERROR_CODE_500)
-        except Exception as ex:
-            log_and_exit("Unable to upload profiler data: {}".format(ex),
-                         SIMAPP_SIMULATION_WORKER_EXCEPTION,
-                         SIMAPP_EVENT_ERROR_CODE_500)
+        logger.info("Profiler stats written locally to %s (S3 upload disabled).", s3_file_name)

@@ -157,10 +157,10 @@ def _build_agent(
     namespaced topics and the controller commands that car (see
     ``MultiAgentDeepRacerEnv``).
     '''
-    # Initialise the ROS node if one hasn't been started yet.
-    import rospy
-    if not rospy.core.is_initialized():
-        rospy.init_node('deepracer_env', anonymous=True)
+    # Ensure the shared rclpy node exists (idempotent — replaces the ROS 1
+    # rospy.init_node; every ported module pulls the same node from runtime).
+    from deepracer_env.runtime import get_node
+    get_node()
 
     # Deferred imports keep the top-level import cost low and avoid
     # circular dependencies at module load time.
@@ -395,6 +395,13 @@ class DeepRacerEnv(gymnasium.Env):
                 self._obstacle_manager.teardown()
             except Exception as ex:
                 LOG.warning('Obstacle teardown failed during close(): %s', ex)
+        # Tear down the shared rclpy node + context cleanly (stop the executor
+        # thread before the context is finalised) to avoid a shutdown segfault.
+        try:
+            from deepracer_env.runtime import reset_runtime
+            reset_runtime()
+        except Exception as ex:  # noqa: BLE001
+            LOG.warning('runtime teardown failed during close(): %s', ex)
 
     def render(self) -> None:  # type: ignore[override]
         '''Rendering is handled externally by Gazebo / RViz.'''
@@ -446,14 +453,12 @@ class DeepRacerEnv(gymnasium.Env):
                 unrecoverable in-process; a looped caller should checkpoint and
                 restart the simulator container.
         '''
-        import rospy
-        from std_srvs.srv import Empty
+        from deepracer_env.runtime import get_sim_control
         from deepracer_env.environments.world_swap import WorldSwapper, WorldSwapError
-        from deepracer_env.track_geom.constants import (
-            PAUSE_PHYSICS, UNPAUSE_PHYSICS,
-        )
         from deepracer_env.track_geom.track_data import TrackData
         from deepracer_env.cameras.frustum_manager import FrustumManager
+
+        sim = get_sim_control()
 
         if not self._has_reset:
             raise RuntimeError(
@@ -468,21 +473,12 @@ class DeepRacerEnv(gymnasium.Env):
         # never leave the simulation track-less.
         swapper.validate(world_name)
 
-        current_world = rospy.get_param('WORLD_NAME', None)
+        current_world = os.environ.get('WORLD_NAME')
         LOG.info('set_world(%r): swapping from %r', world_name, current_world)
 
-        # Lazily create the pause/unpause proxies. Plain ServiceProxy (not the
-        # ServiceProxyWrapper) so a swap that hits a dead gzserver fails fast
-        # and is catchable, instead of the wrapper's 5-minute retry-then-exit.
-        if self._pause_srv is None:
-            rospy.wait_for_service(PAUSE_PHYSICS, timeout=30.0)
-            self._pause_srv = rospy.ServiceProxy(PAUSE_PHYSICS, Empty)
-        if self._unpause_srv is None:
-            rospy.wait_for_service(UNPAUSE_PHYSICS, timeout=30.0)
-            self._unpause_srv = rospy.ServiceProxy(UNPAUSE_PHYSICS, Empty)
-
         try:
-            self._pause_srv()
+            # Pause physics so the car never free-falls onto a missing track.
+            sim.pause()
 
             # 1. Tear down OA obstacles while the OLD TrackData is still live
             #    (teardown both deletes the Gazebo models and unregisters them
@@ -504,7 +500,7 @@ class DeepRacerEnv(gymnasium.Env):
             # 3. Rebuild track geometry. Clearing the singleton + WORLD_NAME and
             #    re-getting forces a fresh load of routes/<world>.npy.
             TrackData._instance_ = None
-            rospy.set_param('WORLD_NAME', world_name)
+            os.environ['WORLD_NAME'] = world_name
             TrackData.get_instance()
             # FrustumManager caches camera-frustum geometry keyed on the old
             # track; drop it so object_in_camera recomputes for the new world.
@@ -533,11 +529,11 @@ class DeepRacerEnv(gymnasium.Env):
             # propagate to the caller.
             if swapper.gazebo_alive():
                 try:
-                    self._unpause_srv()
+                    sim.unpause()
                 except Exception as ex:  # noqa: BLE001
                     LOG.error('Failed to unpause physics after set_world: %s', ex)
             else:
-                LOG.error('gzserver is not responding after set_world(%r); '
+                LOG.error('gz is not responding after set_world(%r); '
                           'skipping unpause', world_name)
 
         # 7. Discard frames buffered against the old track and block for a

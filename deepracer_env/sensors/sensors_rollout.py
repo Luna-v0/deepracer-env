@@ -23,12 +23,14 @@ whose single key is the sensor\\'s ``Input.value`` string, ready to be merged
 by :class:`~markov.sensors.composite_sensor.CompositeSensor`.
 '''
 import logging
-import rospy
 import numpy as np
 from sensor_msgs.msg import Image as sensor_image
 from sensor_msgs.msg import LaserScan
 from PIL import Image
 
+# ROS 2 port: subscriptions are created on the shared, background-spinning
+# rclpy node provided by deepracer_env.runtime instead of rospy.Subscriber.
+from deepracer_env.runtime import get_node
 from deepracer_env.sensors.utils import get_observation_space
 from deepracer_env.sensors.sensor_interface import SensorInterface, LidarInterface
 from deepracer_env.sensors.constants import Input
@@ -81,7 +83,10 @@ class Camera(SensorInterface):
             because virtual event dynamic spawning for sensor can take up to 60.0 seconds to be alive.
         """
         self.image_buffer = utils.DoubleBuffer()
-        rospy.Subscriber('/{}/camera/zed/rgb/image_rect_color'.format(racecar_name), sensor_image, self._camera_cb_)
+        node = get_node()
+        node.create_subscription(sensor_image,
+                                 '/{}/camera/zed/rgb/image_rect_color'.format(racecar_name),
+                                 self._camera_cb_, 10)
         self.raw_data = None
         self.sensor_type = Input.CAMERA.value
         self.timeout = timeout
@@ -133,7 +138,10 @@ class Observation(SensorInterface):
             because virtual event dynamic spawning for sensor can take up to 60.0 seconds to be alive.
         """
         self.image_buffer = utils.DoubleBuffer()
-        rospy.Subscriber('/{}/camera/zed/rgb/image_rect_color'.format(racecar_name), sensor_image, self._camera_cb_)
+        node = get_node()
+        node.create_subscription(sensor_image,
+                                 '/{}/camera/zed/rgb/image_rect_color'.format(racecar_name),
+                                 self._camera_cb_, 10)
         self.sensor_type = Input.OBSERVATION.value
         self.raw_data = None
         self.timeout = timeout
@@ -188,7 +196,10 @@ class LeftCamera(SensorInterface):
             because virtual event dynamic spawning for sensor can take up to 60.0 seconds to be alive.
         """
         self.image_buffer = utils.DoubleBuffer()
-        rospy.Subscriber('/{}/camera/zed/rgb/image_rect_color'.format(racecar_name), sensor_image, self._camera_cb_)
+        node = get_node()
+        node.create_subscription(sensor_image,
+                                 '/{}/camera/zed/rgb/image_rect_color'.format(racecar_name),
+                                 self._camera_cb_, 10)
         self.sensor_type = Input.LEFT_CAMERA.value
         self.raw_data = None
         self.timeout = timeout
@@ -243,12 +254,13 @@ class DualCamera(SensorInterface):
         self.image_buffer_left = utils.DoubleBuffer()
         self.image_buffer_right = utils.DoubleBuffer()
         # Set up the subscribers
-        rospy.Subscriber('/{}/camera/zed/rgb/image_rect_color'.format(racecar_name),
-                         sensor_image,
-                         self._left_camera_cb_)
-        rospy.Subscriber('/{}/camera/zed_right/rgb/image_rect_color_right'.format(racecar_name),
-                         sensor_image,
-                         self._right_camera_cb_)
+        node = get_node()
+        node.create_subscription(sensor_image,
+                                 '/{}/camera/zed/rgb/image_rect_color'.format(racecar_name),
+                                 self._left_camera_cb_, 10)
+        node.create_subscription(sensor_image,
+                                 '/{}/camera/zed_right/rgb/image_rect_color_right'.format(racecar_name),
+                                 self._right_camera_cb_, 10)
         self.sensor_type = Input.STEREO.value
         self.timeout = timeout
 
@@ -313,7 +325,8 @@ class Lidar(LidarInterface):
             because virtual event dynamic spawning for sensor can take up to 60.0 seconds to be alive.
         """
         self.data_buffer = utils.DoubleBuffer(clear_data_on_get=False)
-        rospy.Subscriber('/{}/scan'.format(racecar_name), LaserScan, self._scan_cb)
+        node = get_node()
+        node.create_subscription(LaserScan, '/{}/scan'.format(racecar_name), self._scan_cb, 10)
         self.sensor_type = Input.LIDAR.value
         self.timeout = timeout
 
@@ -364,7 +377,8 @@ class SectorLidar(LidarInterface):
             because virtual event dynamic spawning for sensor can take up to 60.0 seconds to be alive.
         """
         self.data_buffer = utils.DoubleBuffer(clear_data_on_get=False)
-        rospy.Subscriber('/{}/scan'.format(racecar_name), LaserScan, self._scan_cb)
+        node = get_node()
+        node.create_subscription(LaserScan, '/{}/scan'.format(racecar_name), self._scan_cb, 10)
         self.sensor_type = Input.SECTOR_LIDAR.value
         self.timeout = timeout
 
@@ -414,7 +428,8 @@ class DiscretizedSectorLidar(LidarInterface):
             because virtual event dynamic spawning for sensor can take up to 60.0 seconds to be alive.
         """
         self.data_buffer = utils.DoubleBuffer(clear_data_on_get=False)
-        rospy.Subscriber('/{}/scan'.format(racecar_name), LaserScan, self._scan_cb)
+        node = get_node()
+        node.create_subscription(LaserScan, '/{}/scan'.format(racecar_name), self._scan_cb, 10)
         self.sensor_type = Input.DISCRETIZED_SECTOR_LIDAR.value
         self.model_metadata = config["model_metadata"]
         self.timeout = timeout

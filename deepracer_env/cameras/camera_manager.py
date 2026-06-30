@@ -44,6 +44,8 @@ class CameraManager(AbstractTracker):
             raise GenericRolloutException("Attempting to construct multiple Camera Manager")
         self.lock = threading.RLock()
         self.camera_namespaces = {}
+        # ROS 2 port: guard so a misbehaving cosmetic camera only logs once.
+        self._cam_error_logged = False
 
         # there should be only one camera manager instance
         CameraManager._instance_ = self
@@ -107,11 +109,11 @@ class CameraManager(AbstractTracker):
             if namespace == '*':
                 for cur_namespace in self.camera_namespaces:
                     for camera in self.camera_namespaces[cur_namespace]:
-                        camera.reset_pose(car_pose)
+                        self._safe_camera_call(camera.reset_pose, car_pose)
             else:
                 if namespace in self.camera_namespaces:
                     for camera in self.camera_namespaces[namespace]:
-                        camera.reset_pose(car_pose)
+                        self._safe_camera_call(camera.reset_pose, car_pose)
 
     def update_tracker(self, delta_time, sim_time):
         """
@@ -136,8 +138,25 @@ class CameraManager(AbstractTracker):
         if namespace == '*':
             for cur_namespace in self.camera_namespaces:
                 for camera in self.camera_namespaces[cur_namespace]:
-                    camera.update_pose(car_pose, delta_time)
+                    self._safe_camera_call(camera.update_pose, car_pose, delta_time)
         else:
             if namespace in self.camera_namespaces:
                 for camera in self.camera_namespaces[namespace]:
-                    camera.update_pose(car_pose, delta_time)
+                    self._safe_camera_call(camera.update_pose, car_pose, delta_time)
+
+    def _safe_camera_call(self, fn, *args):
+        """Invoke a cosmetic-camera callback, swallowing any error.
+
+        ROS 2 port: the spectator/follow cameras are purely cosmetic, but
+        ``reset`` and ``update_tracker`` run on the controller's per-episode and
+        per-tick paths. A failure in one camera (e.g. its model was never
+        spawned because the simulator rejected the SDF) must never propagate and
+        break a reset/step, so it is caught here and logged once.
+        """
+        try:
+            fn(*args)
+        except Exception as ex:  # noqa: BLE001 — cosmetic camera, never fatal
+            if not self._cam_error_logged:
+                LOG.info("[CameraManager]: cosmetic camera call %s failed "
+                         "(no-op): %s", getattr(fn, '__name__', fn), ex)
+                self._cam_error_logged = True

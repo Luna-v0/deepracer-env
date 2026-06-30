@@ -28,7 +28,7 @@ from deepracer_env.log_handler.logger import Logger
 from deepracer_env.log_handler.deepracer_exceptions import GenericRolloutException
 from scipy.spatial.transform import Rotation
 from deepracer_env.constants import SIMAPP_VERSION_1, SIMAPP_VERSION_2, SIMAPP_VERSION_3
-from deepracer_env.boto.s3.constants import ModelMetadataKeys
+from deepracer_env.agent_ctrl.model_metadata import ModelMetadataKeys
 from deepracer_env.track_geom.utils import apply_orientation
 
 LOGGER = Logger(__name__, logging.INFO).get_logger()
@@ -174,18 +174,26 @@ def get_normalized_progress(current_progress, start_ndist):
     return (current_progress + start_ndist * 100) % 100
 
 
-def send_action(velocity_pub_dict, steering_pub_dict, steering_angle, speed):
-    '''Publishes the given action to all the topics in the given dicts
-       velocity_pub_dict - Dictionary containing all the velocity joints
-       steering_pub_dict - Dictionary containing all the movable joints
-       steering_angle - Desired amount, in radians, to move the movable joints by
-       speed - Angular velocity which the velocity joints should rotate with
-    '''
-    for _, pub in velocity_pub_dict.items():
-        pub.publish(speed)
+def send_action(wheels_pub, steering_pub, steering_angle, speed):
+    '''Publish a drive command to the ros2_control group controllers.
 
-    for _, pub in steering_pub_dict.items():
-        pub.publish(steering_angle)
+    Ported from the ROS 1 form (six ``std_msgs/Float64`` topics) to the ROS 2
+    ``ros2_control`` form: two ``std_msgs/Float64MultiArray`` group commands.
+    Same Ackermann-free semantics as the legacy stack — the *same* angular
+    velocity goes to all four wheels and the *same* angle to both steering
+    hinges; the URDF joint geometry realises the steering. (See
+    ``deepracer_env.agent_ctrl.drive`` for the joint-order contract.)
+
+    Args:
+        wheels_pub: publisher for ``/<ns>/wheels_velocity_controller/commands``
+            (``std_msgs/Float64MultiArray``).
+        steering_pub: publisher for ``/<ns>/steering_position_controller/commands``.
+        steering_angle (float): steering, in radians (both hinges).
+        speed (float): wheel angular velocity, in rad/s (all four wheels).
+    '''
+    from std_msgs.msg import Float64MultiArray
+    wheels_pub.publish(Float64MultiArray(data=[float(speed)] * 4))
+    steering_pub.publish(Float64MultiArray(data=[float(steering_angle)] * 2))
 
 
 

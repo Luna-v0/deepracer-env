@@ -1,41 +1,39 @@
 #################################################################################
 #   Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.          #
-#                                                                               #
 #   Licensed under the Apache License, Version 2.0 (the "License").             #
-#   You may not use this file except in compliance with the License.            #
-#   You may obtain a copy of the License at                                     #
-#                                                                               #
-#       http://www.apache.org/licenses/LICENSE-2.0                              #
-#                                                                               #
-#   Unless required by applicable law or agreed to in writing, software         #
-#   distributed under the License is distributed on an "AS IS" BASIS,           #
-#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.    #
-#   See the License for the specific language governing permissions and         #
-#   limitations under the License.                                              #
 #################################################################################
+"""Link-state reader, re-homed onto the SimControl seam.
 
+Same API as the ROS 1 tracker: ``get_link_state(link, frame, ...)`` returns a
+response whose ``.link_state.pose`` the controller reads for the four wheel
+positions (``all_wheels_on_track``).
+
+gz-sim's pose feed is per-*model*, not always per-link. We first try to read the
+link entity by name; if the backend doesn't expose it, we fall back to the
+owning model's pose (``<model>::<link>`` -> ``<model>``). Wheel points then
+collapse to the car centre — i.e. ``all_wheels_on_track`` degrades to
+"is the car centre on track", a safe approximation. (A future refinement can
+derive exact wheel world positions from the model pose + URDF joint offsets.)
+"""
 import threading
-from deepracer_env.log_handler.deepracer_exceptions import GenericRolloutException
-import copy
-import rospy
 
-from deepracer_msgs.srv import GetLinkStates
-from gazebo_msgs.srv import GetLinkStateResponse
-from deepracer_env.track_geom.constants import GET_LINK_STATES
-from deepracer_env.rospy_wrappers import ServiceProxyWrapper
+from deepracer_env.log_handler.deepracer_exceptions import GenericRolloutException
 from deepracer_env.gazebo_tracker.abs_tracker import AbstractTracker
 import deepracer_env.gazebo_tracker.constants as consts
+from deepracer_env.runtime import get_sim_control
+from deepracer_env.sim_control.compat import link_state_response
+from deepracer_env.sim_control.interface import SimControlError
+from deepracer_env.sim_control.types import EntityState
 
 
 class GetLinkStateTracker(AbstractTracker):
-    """
-    GetLinkState Tracker class
-    """
+    """Reads link pose/twist from the shared simulator backend."""
+
     _instance_ = None
 
     @staticmethod
     def get_instance():
-        """Method for getting a reference to the GetLinkState Tracker object"""
+        """Return the singleton, constructing it on first use."""
         if GetLinkStateTracker._instance_ is None:
             GetLinkStateTracker()
         return GetLinkStateTracker._instance_
@@ -43,69 +41,30 @@ class GetLinkStateTracker(AbstractTracker):
     def __init__(self):
         if GetLinkStateTracker._instance_ is not None:
             raise GenericRolloutException("Attempting to construct multiple GetLinkState Tracker")
-
         self.lock = threading.RLock()
-        self.link_map = {}
-        self.link_names = []
-        self.reference_frames = []
-
-        rospy.wait_for_service(GET_LINK_STATES)
-        self._get_link_states = ServiceProxyWrapper(GET_LINK_STATES, GetLinkStates)
-
+        self._sim = get_sim_control()
         GetLinkStateTracker._instance_ = self
         super(GetLinkStateTracker, self).__init__(priority=consts.TrackerPriority.HIGH)
 
-    def get_link_state(self, link_name, reference_frame, blocking=False,
-                       auto_sync=True):
-        """
-        Return link state of given link name based on given reference frame
-
-        Args:
-            link_name (str): name of the link
-            reference_frame (str): reference frame
-            blocking (bool): flag to block or not
-            auto_sync (bool): flag whether to automatically synchronize or not.
-                              - Ignored if (model_name, relative_entity_name) pair is already using auto_sync
-
-        Returns:
-            response msg (gazebo_msgs::GetLinkStateResponse)
-        """
-        msg = GetLinkStateResponse()
-        msg.success = True
-        key = (link_name, reference_frame)
+    def get_link_state(self, link_name, reference_frame, blocking=False, auto_sync=True):
+        """Return the link's pose/twist as a ``LinkStateResponse``."""
         with self.lock:
-            if blocking or key not in self.link_map:
-                res = self._get_link_states([key[0]], [key[1]])
-                if res.success and res.status[0]:
-                    msg.link_state = res.link_states[0]
-                    if auto_sync or key in self.link_map:
-                        if key not in self.link_map:
-                            self.link_names.append(link_name)
-                            self.reference_frames.append(reference_frame)
-                        self.link_map[key] = copy.deepcopy(msg.link_state)
-                else:
-                    msg.success = False
-                    msg.status_message = res.messages[0] if res.success else res.status_message
-            else:
-                msg.link_state = copy.deepcopy(self.link_map[key])
-        return msg
+            entity_state = self._read(link_name)
+        return link_state_response(link_name, entity_state, success=True)
+
+    def _read(self, link_name):
+        """Entity-state read for a link's owning model (from the shared cache).
+
+        gz pose/info is per-model, so we read the model (``<model>::<link>`` ->
+        ``<model>``) from the cache GetModelStateTracker already refreshes — no
+        extra per-call snapshot. Wheel points thus collapse to the car centre
+        (a safe ``all_wheels_on_track`` approximation, see module docstring).
+        """
+        model = link_name.split("::", 1)[0]
+        try:
+            return self._sim.get_entity_state(model)
+        except SimControlError:
+            return EntityState()
 
     def update_tracker(self, delta_time, sim_time):
-        """
-        Update link_states of the links that this tracker is tracking
-
-        Args:
-            delta_time (float): delta time
-            sim_time (Clock): simulation time
-        """
-        if self.link_names:
-            with self.lock:
-                res = self._get_link_states(self.link_names,
-                                                    self.reference_frames)
-                if res.success:
-                    for link_state, status in zip(res.link_states, res.status):
-                        if status:
-                            link_name = link_state.link_name
-                            reference_frame = link_state.reference_frame
-                            key = (link_name, reference_frame)
-                            self.link_map[key] = link_state
+        """No-op: GetModelStateTracker already refreshes the shared snapshot."""

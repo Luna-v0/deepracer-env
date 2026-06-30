@@ -1,111 +1,71 @@
 #################################################################################
 #   Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.          #
-#                                                                               #
 #   Licensed under the Apache License, Version 2.0 (the "License").             #
-#   You may not use this file except in compliance with the License.            #
-#   You may obtain a copy of the License at                                     #
-#                                                                               #
-#       http://www.apache.org/licenses/LICENSE-2.0                              #
-#                                                                               #
-#   Unless required by applicable law or agreed to in writing, software         #
-#   distributed under the License is distributed on an "AS IS" BASIS,           #
-#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.    #
-#   See the License for the specific language governing permissions and         #
-#   limitations under the License.                                              #
 #################################################################################
+"""Visual transparency tracker, re-homed onto the SimControl seam.
 
+Used by domain randomisation / visual occlusion (gated, default off). Maps the
+legacy ``deepracer_msgs/SetVisualTransparencies`` to
+``SimControl.set_visual_transparency`` (native gz ``visual_config``). Same API.
+"""
 import threading
 from collections import OrderedDict
 
 from deepracer_env.log_handler.deepracer_exceptions import GenericRolloutException
-import rospy
-
-from deepracer_env.domain_randomizations.constants import GazeboServiceName
-from deepracer_env.rospy_wrappers import ServiceProxyWrapper
 from deepracer_env.gazebo_tracker.abs_tracker import AbstractTracker
 import deepracer_env.gazebo_tracker.constants as consts
-from deepracer_msgs.srv import (SetVisualTransparencies, SetVisualTransparenciesRequest,
-                                SetVisualTransparencyResponse)
+from deepracer_env.runtime import get_sim_control
+from deepracer_env.sim_control.interface import CapabilityNotSupported
+from deepracer_env.track_geom.constants import RACETRACK_MODEL_NAME
+
+
+class _Response(object):
+    def __init__(self, success=True, status_message=""):
+        self.success = success
+        self.status_message = status_message
 
 
 class SetVisualTransparencyTracker(AbstractTracker):
-    """
-    SetVisualTransparency Tracker class
-    """
+    """Sets model-visual transparency via the shared simulator backend."""
+
     _instance_ = None
 
     @staticmethod
     def get_instance():
-        """Method for getting a reference to the SetVisualTransparency Tracker object"""
         if SetVisualTransparencyTracker._instance_ is None:
             SetVisualTransparencyTracker()
         return SetVisualTransparencyTracker._instance_
 
-    def __init__(self):
+    def __init__(self, model_name=RACETRACK_MODEL_NAME):
         if SetVisualTransparencyTracker._instance_ is not None:
             raise GenericRolloutException("Attempting to construct multiple SetVisualTransparency Tracker")
-
         self.lock = threading.RLock()
-        self.visual_name_map = OrderedDict()
-        self.link_name_map = OrderedDict()
-        self.transparency_map = OrderedDict()
-
-        rospy.wait_for_service(GazeboServiceName.SET_VISUAL_TRANSPARENCIES.value)
-        self.set_visual_transparencies = ServiceProxyWrapper(GazeboServiceName.SET_VISUAL_TRANSPARENCIES.value,
-                                                             SetVisualTransparencies)
-
+        self._model_name = model_name
+        self._pending = OrderedDict()  # (visual, link) -> transparency
+        self._sim = get_sim_control()
         SetVisualTransparencyTracker._instance_ = self
         super(SetVisualTransparencyTracker, self).__init__(priority=consts.TrackerPriority.LOW)
 
     def set_visual_transparency(self, visual_name, link_name, transparency, blocking=False):
-        """
-        Set transparency that will be updated in next update call
-        Args:
-            visual_name (str): name of visual
-            link_name (str):  name of the link holding visual
-            transparency (float): visual's transparency between 0.0 (opaque) and 1.0 (full transparent)
-            blocking (bool): flag to block or not
-        Returns:
-            msg (SetVisualTransparencyResponse)
-        """
-        msg = SetVisualTransparencyResponse()
-        key = (visual_name, link_name)
-        with self.lock:
-            if blocking:
-                if key in self.visual_name_map:
-                    del self.visual_name_map[key]
-                    del self.link_name_map[key]
-                    del self.transparency_map[key]
-                req = SetVisualTransparenciesRequest()
-                req.visual_names = [visual_name]
-                req.link_names = [link_name]
-                req.transparencies = [transparency]
-                res = self.set_visual_transparencies(req)
-                msg.success = res.success and res.status[0]
-                msg.status_message = res.messages[0] if res.success else res.status_message
-            else:
-                self.visual_name_map[key] = visual_name
-                self.link_name_map[key] = link_name
-                self.transparency_map[key] = transparency
-        return msg
+        """Set one visual's transparency now (blocking) or on the next tick."""
+        if blocking:
+            self._apply(visual_name, link_name, float(transparency))
+        else:
+            with self.lock:
+                self._pending[(visual_name, link_name)] = float(transparency)
+        return _Response(success=True)
+
+    def _apply(self, visual_name, link_name, transparency):
+        try:
+            self._sim.set_visual_transparency(self._model_name, link_name, visual_name, transparency)
+        except CapabilityNotSupported:
+            pass
+        except Exception:  # noqa: BLE001 — DR must never break a reset
+            pass
 
     def update_tracker(self, delta_time, sim_time):
-        """
-        Update all color materials tracking to gazebo
-
-        Args:
-            delta_time (float): delta time
-            sim_time (Clock): simulation time
-        """
+        """Flush queued transparency updates."""
         with self.lock:
-            if self.visual_name_map.values():
-                req = SetVisualTransparenciesRequest()
-
-                req.visual_names = self.visual_name_map.values()
-                req.link_names = self.link_name_map.values()
-                req.transparencies = self.transparency_map.values()
-                self.set_visual_transparencies(req)
-
-            self.visual_name_map = OrderedDict()
-            self.link_name_map = OrderedDict()
-            self.transparency_map = OrderedDict()
+            pending, self._pending = self._pending, OrderedDict()
+        for (visual_name, link_name), transparency in pending.items():
+            self._apply(visual_name, link_name, transparency)

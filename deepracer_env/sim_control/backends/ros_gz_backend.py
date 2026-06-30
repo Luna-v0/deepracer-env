@@ -72,6 +72,7 @@ class RosGzBackend(SimControl):
         *,
         gz_timeout_ms: int = 5000,
         cli_timeout_s: float = 10.0,
+        refresh_min_interval_s: float = 0.04,
     ) -> None:
         """Bind to a live gz world.
 
@@ -80,11 +81,17 @@ class RosGzBackend(SimControl):
                 SDF), used to build the ``/world/<world>/…`` service prefix.
             gz_timeout_ms: Per-service timeout handed to ``gz service``.
             cli_timeout_s: Wall-clock cap on each ``subprocess`` invocation.
+            refresh_min_interval_s: Minimum wall-clock gap between (non-forced)
+                pose snapshots. The gz ``/clock`` callback asks for a refresh
+                every tick (up to ~1 kHz); each snapshot is a CLI subprocess, so
+                we coalesce them to ~25 Hz. Blocking reads pass ``force=True``.
         """
         self._world = world_name
         self._prefix = "/world/{}".format(world_name)
         self._gz_timeout_ms = gz_timeout_ms
         self._cli_timeout_s = cli_timeout_s
+        self._refresh_min_interval_s = refresh_min_interval_s
+        self._last_refresh_t = 0.0
         self._paused = False
         # batched pose cache: name -> (Pose, monotonic_t); previous snapshot kept
         # so twist can be finite-differenced (gz pose/info carries no velocity).
@@ -193,27 +200,32 @@ class RosGzBackend(SimControl):
 
     # -- state read / write ----------------------------------------------------
 
-    def refresh_state(self) -> None:
+    def refresh_state(self, force: bool = False) -> None:
         """Take one batched ``pose/info`` snapshot into the cache.
 
-        Call once per environment step *before* reading car/obstacle poses. The
+        Called from the sim-clock callback (and forced by blocking reads). A
+        snapshot is a ``gz topic`` subprocess, so non-forced calls are coalesced
+        to ``refresh_min_interval_s`` to avoid a per-tick subprocess storm. The
         previous snapshot is retained so :meth:`get_entity_state` can
         finite-difference a velocity (gz ``pose/info`` carries pose only).
         """
+        now = time.monotonic()
+        if not force and (now - self._last_refresh_t) < self._refresh_min_interval_s:
+            return
+        self._last_refresh_t = now
         out = self._run([
             "gz", "topic", "-e", "-n", "1",
             "-t", "{}/pose/info".format(self._prefix),
         ])
-        now = time.monotonic()
         poses = self._parse_pose_v(out)
         if poses:
             self._prev_pose_cache = self._pose_cache
-            self._pose_cache = {n: (p, now) for n, p in poses.items()}
+            self._pose_cache = {n: (p, time.monotonic()) for n, p in poses.items()}
 
     def get_entity_state(self, name, *, reference_frame="world"):  # noqa: D102
         if name not in self._pose_cache:
-            # Lazy single refresh if the caller never primed the cache.
-            self.refresh_state()
+            # Lazy forced refresh if the caller never primed the cache.
+            self.refresh_state(force=True)
         if name not in self._pose_cache:
             raise SimControlError("entity {!r} not found in pose snapshot".format(name))
         pose, t = self._pose_cache[name]

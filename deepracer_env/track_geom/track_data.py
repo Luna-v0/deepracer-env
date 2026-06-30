@@ -21,9 +21,8 @@ import math
 import os
 import threading
 import numpy as np
-import rospkg
-import rospy
 
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Pose
 from shapely.geometry import Point, Polygon
 from shapely.geometry.polygon import LinearRing, LineString
@@ -188,25 +187,30 @@ class TrackData(object):
         return cls(world_name=world_name, offset=offset, register_singleton=False)
 
     def __init__(self, world_name=None, offset=(0.0, 0.0), register_singleton=True):
-        '''Instantiates the class and creates clients for the relevant ROS services.
+        '''Instantiates the class and loads the track geometry.
 
-        ``world_name`` defaults to the ``WORLD_NAME`` rosparam (single-car).
-        ``offset`` shifts the track geometry by (dx, dy) for a separated track
-        instance. ``register_singleton`` keeps the classic single-agent
-        ``get_instance()`` behaviour; multi-car passes ``False`` (via ``create``).'''
+        ``world_name`` defaults to the ``WORLD_NAME`` environment variable
+        (single-car). ``offset`` shifts the track geometry by (dx, dy) for a
+        separated track instance. ``register_singleton`` keeps the classic
+        single-agent ``get_instance()`` behaviour; multi-car passes ``False``
+        (via ``create``).
+
+        NOTE: ROS 2 has no global param server, so the former ``rospy.get_param``
+        lookups are read from environment variables instead.'''
         self._park_positions_ = deque()
-        self._park_location = ParkLocation(rospy.get_param("PARK_LOCATION", ParkLocation.BOTTOM.value).lower())
-        self._reverse_dir_ = utils.str2bool(rospy.get_param("REVERSE_DIR", False))
+        self._park_location = ParkLocation(os.environ.get("PARK_LOCATION", ParkLocation.BOTTOM.value).lower())
+        self._reverse_dir_ = utils.str2bool(os.environ.get("REVERSE_DIR", False))
         if register_singleton and TrackData._instance_ is not None:
             raise GenericRolloutException("Attempting to construct multiple TrackData objects")
         try:
-            rospack = rospkg.RosPack()
-            deepracer_path = rospack.get_path("deepracer_simulation_environment")
-            world = world_name if world_name is not None else rospy.get_param("WORLD_NAME")
+            # ROS 2: package share dir via ament instead of rospkg.RosPack().
+            deepracer_path = get_package_share_directory("deepracer_simulation_environment")
+            # Prefer the explicitly passed world_name; otherwise fall back to env.
+            world = world_name if world_name is not None else os.environ.get("WORLD_NAME")
             waypoints_path = os.path.join(deepracer_path, "routes",
                                           "{}.npy".format(world))
-            self._is_bot_car_ = int(rospy.get_param("NUMBER_OF_BOT_CARS", 0)) > 0
-            self._bot_car_speed_ = float(rospy.get_param("BOT_CAR_SPEED", 0.0))
+            self._is_bot_car_ = int(os.environ.get("NUMBER_OF_BOT_CARS", 0)) > 0
+            self._bot_car_speed_ = float(os.environ.get("BOT_CAR_SPEED", 0.0))
             waypoints = np.load(waypoints_path)
             # Shift the whole track (center/inner/outer x,y columns) to this
             # instance's world location for separated multi-car track instances.
@@ -234,15 +238,19 @@ class TrackData(object):
                                                              waypoints[:, 0:2][::-1]) / 2))
             self._outer_lane_reverse_ = TrackLine(poly_func((waypoints[:, 4:6][::-1] + \
                                                              waypoints[:, 0:2][::-1]) / 2))
+            # shapely 2.x no longer iterates/array-converts geometry objects, so
+            # build polygons from explicit coordinate arrays (geom.coords), not
+            # from the TrackLine wrappers / LineStrings directly.
+            center_xy = np.asarray(self.center_line.line.coords)
+            inner_xy = np.asarray(self.inner_border.line.coords)
+            outer_xy = np.asarray(self.outer_border.line.coords)
             if self.is_loop:
-                self._inner_poly_ = Polygon(self.center_line, [self.inner_border])
-                self._road_poly_ = Polygon(self.outer_border, [self.inner_border])
+                self._inner_poly_ = Polygon(center_xy, [inner_xy])
+                self._road_poly_ = Polygon(outer_xy, [inner_xy])
                 self._is_ccw_ = self._center_line_forward_.is_ccw
             else:
-                self._inner_poly_ = Polygon(np.vstack((self.center_line.line,
-                                                       np.flipud(self.inner_border))))
-                self._road_poly_ = Polygon(np.vstack((self.outer_border,
-                                                      np.flipud(self.inner_border))))
+                self._inner_poly_ = Polygon(np.vstack((center_xy, np.flipud(inner_xy))))
+                self._road_poly_ = Polygon(np.vstack((outer_xy, np.flipud(inner_xy))))
                 self._is_ccw_ = True
 
             self.object_poses = OrderedDict()

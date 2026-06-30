@@ -18,10 +18,17 @@ import sys
 import math
 import logging
 import xml.etree.ElementTree as ET
-import rospy
 
-from deepracer_simulation_environment.srv import TopCamDataSrvResponse, TopCamDataSrv
-from gazebo_msgs.msg import ModelState
+# ROS 2 port:
+#  * ``import rospy`` removed — there is no rospy on ROS 2.
+#  * The ROS 1 ``deepracer_simulation_environment/TopCamDataSrv`` service is not
+#    available on ROS 2 (it was a Gazebo-classic / virtual-event interface). The
+#    top camera is a cosmetic spectator camera, so the settings service is no
+#    longer registered; ``_handle_get_top_cam_data`` is kept as a plain accessor.
+#  * ``gazebo_msgs/ModelState`` -> the compat shim (model_name + geometry_msgs
+#    Pose). SetModelStateTracker is re-homed onto the SimControl seam, so the
+#    teleport behaviour is unchanged. ``geometry_msgs/Pose`` still exists on ROS 2.
+from deepracer_env.sim_control.compat import ModelState
 from geometry_msgs.msg import Pose
 from deepracer_env.track_geom.track_data import TrackData
 from deepracer_env.track_geom.utils import euler_to_quaternion
@@ -72,16 +79,27 @@ class TopCamera(AbstractCamera):
         self.camera_settings_dict[CameraSettings.IMG_WIDTH] = DEFAULT_RESOLUTION[0]
         self.camera_settings_dict[CameraSettings.IMG_HEIGHT] = DEFAULT_RESOLUTION[1]
 
-        rospy.Service('get_top_cam_data', TopCamDataSrv, self._handle_get_top_cam_data)
+        # ROS 2 port: the ROS 1 ``get_top_cam_data`` service is intentionally not
+        # registered (its srv type lived in the Gazebo-classic
+        # ``deepracer_simulation_environment`` package and only served the virtual
+        # event video pipeline). The computed settings remain available in-process
+        # through ``_handle_get_top_cam_data`` / ``camera_settings_dict``.
+        LOG.info("[TopCamera]: ROS 2 port — 'get_top_cam_data' service not wired; "
+                 "camera settings available in-process only.")
 
-    def _handle_get_top_cam_data(self, req):
-        '''Response handler for clients requesting the camera settings data
-           req - Client request, which should be an empty request
+    def _handle_get_top_cam_data(self, req=None):
+        '''Return the camera settings data.
+
+        ROS 2 port: previously a ``TopCamDataSrv`` service handler; now a plain
+        in-process accessor that returns the four settings as a tuple
+        ``(horizontal_fov, padding_pct, img_width, img_height)``.
+
+           req - kept for signature parity (ignored).
         '''
-        return TopCamDataSrvResponse(self.camera_settings_dict[CameraSettings.HORZ_FOV],
-                                     self.camera_settings_dict[CameraSettings.PADDING_PCT],
-                                     self.camera_settings_dict[CameraSettings.IMG_WIDTH],
-                                     self.camera_settings_dict[CameraSettings.IMG_HEIGHT])
+        return (self.camera_settings_dict[CameraSettings.HORZ_FOV],
+                self.camera_settings_dict[CameraSettings.PADDING_PCT],
+                self.camera_settings_dict[CameraSettings.IMG_WIDTH],
+                self.camera_settings_dict[CameraSettings.IMG_HEIGHT])
 
     def _get_sdf_string(self, camera_sdf_path):
         """

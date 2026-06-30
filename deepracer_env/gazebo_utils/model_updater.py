@@ -17,22 +17,19 @@
 
 import logging
 
-import rospy
-from gazebo_msgs.msg import ModelState
-from gazebo_msgs.srv import GetModelProperties, GetModelPropertiesRequest, SetModelState, SetModelStateRequest
 from std_msgs.msg import ColorRGBA
 
-from deepracer_msgs.srv import (
-    GetVisualNames, GetVisualNamesRequest,
-    GetVisuals, GetVisualsRequest,
-    SetVisualColors, SetVisualColorsRequest,
-    SetVisualTransparencies, SetVisualTransparenciesRequest,
-)
-
-from deepracer_env.domain_randomizations.constants import GazeboServiceName
-from deepracer_env.rospy_wrappers import ServiceProxyWrapper
-from deepracer_env.track_geom.constants import SET_MODEL_STATE
+from deepracer_env.sim_control.compat import ModelState
 from deepracer_env.log_handler.logger import Logger
+
+# NOTE (Route B): the legacy visual-introspection services (GetVisualNames /
+# GetVisuals / SetVisualColors / SetVisualTransparencies, provided by the deleted
+# Gazebo-classic C++ plugin) have no gz-sim equivalent for *discovery*. Visual
+# domain randomisation now applies colours through the SimControl seam's native
+# gz ``visual_config`` (see the visual trackers). This ModelUpdater is retained
+# only for its colour map + pose helper; the discovery methods are stubs pending
+# the Phase-7 per-arena DomainRandomizer rework, and the module imports cleanly
+# without the removed message packages.
 
 logger = Logger(__name__, logging.INFO).get_logger()
 
@@ -65,17 +62,8 @@ class ModelUpdater:
     _instance = None
 
     def __init__(self):
-        self._set_model_state = ServiceProxyWrapper(SET_MODEL_STATE, SetModelState)
-        self._get_model_prop = ServiceProxyWrapper(
-            GazeboServiceName.GET_MODEL_PROPERTIES.value, GetModelProperties)
-        self._get_visual_names = ServiceProxyWrapper(
-            GazeboServiceName.GET_VISUAL_NAMES.value, GetVisualNames)
-        self._get_visuals = ServiceProxyWrapper(
-            GazeboServiceName.GET_VISUALS.value, GetVisuals)
-        self._set_visual_colors = ServiceProxyWrapper(
-            GazeboServiceName.SET_VISUAL_COLORS.value, SetVisualColors)
-        self._set_visual_transparencies = ServiceProxyWrapper(
-            GazeboServiceName.SET_VISUAL_TRANSPARENCIES.value, SetVisualTransparencies)
+        from deepracer_env.runtime import get_sim_control
+        self._sim = get_sim_control()
 
     @classmethod
     def get_instance(cls) -> "ModelUpdater":
@@ -90,97 +78,24 @@ class ModelUpdater:
 
     def set_model_pose(self, model_name: str, model_pose) -> None:
         """Teleport *model_name* to *model_pose* (geometry_msgs/Pose)."""
-        model_state = ModelState()
-        model_state.model_name = model_name
-        model_state.pose = model_pose
-        model_state.reference_frame = "world"
-        resp = self._set_model_state(SetModelStateRequest(model_state=model_state))
-        if not resp.success:
-            logger.warning("set_model_pose failed for %s: %s", model_name, resp.status_message)
+        from deepracer_env.sim_control.compat import ros_to_seam_pose
+        from deepracer_env.sim_control.types import EntityState
+        try:
+            self._sim.set_entity_state(model_name, EntityState(pose=ros_to_seam_pose(model_pose)))
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("set_model_pose failed for %s: %s", model_name, ex)
 
     def get_model_visuals(self, racecar_name: str):
-        """Return a GetVisuals response containing all visuals for *racecar_name*.
+        """Discovery is unavailable on gz-sim (Route B); returns ``None``.
 
-        The returned object has ``link_names``, ``visual_names``, ``ambients``,
-        ``diffuses``, ``transparencies``, etc. — as defined in GetVisuals.srv.
+        Visual DR now recolours via the seam's native ``visual_config`` keyed by
+        known link/visual names rather than runtime discovery — see the visual
+        trackers and the Phase-7 per-arena DomainRandomizer plan.
         """
-        # 1. Get the list of link names for this model.
-        prop_resp = self._get_model_prop(GetModelPropertiesRequest(model_name=racecar_name))
-        link_names = list(prop_resp.body_names)
-
-        # 2. Resolve which visual belongs to each link.
-        vis_name_resp = self._get_visual_names(
-            GetVisualNamesRequest(link_names=link_names))
-        visual_names = list(vis_name_resp.visual_names)
-        # Filter out empty entries returned for links with no visuals.
-        filtered_links = []
-        filtered_visuals = []
-        for ln, vn in zip(link_names, visual_names):
-            if vn:
-                filtered_links.append(ln)
-                filtered_visuals.append(vn)
-
-        # 3. Fetch the full visual data.
-        visuals_resp = self._get_visuals(
-            GetVisualsRequest(link_names=filtered_links, visual_names=filtered_visuals))
-        return visuals_resp
+        return None
 
     def hide_visuals(self, visuals, ignore_keywords=None) -> None:
-        """Make all visuals fully transparent except those whose name contains a
-        keyword in *ignore_keywords*.
-
-        Parameters
-        ----------
-        visuals:
-            GetVisuals response returned by :meth:`get_model_visuals`.
-        ignore_keywords:
-            List of strings; visuals whose ``visual_name`` contains any of these
-            strings are left unchanged.
-        """
-        if ignore_keywords is None:
-            ignore_keywords = []
-
-        hide_links = []
-        hide_visuals_list = []
-        for ln, vn in zip(visuals.link_names, visuals.visual_names):
-            if not any(kw in vn for kw in ignore_keywords):
-                hide_links.append(ln)
-                hide_visuals_list.append(vn)
-
-        if not hide_links:
-            return
-
-        req = SetVisualTransparenciesRequest(
-            link_names=hide_links,
-            visual_names=hide_visuals_list,
-            transparencies=[1.0] * len(hide_links),
-            block=True,
-        )
-        resp = self._set_visual_transparencies(req)
-        if not resp.success:
-            logger.warning("hide_visuals failed: %s", resp.status_message)
+        """No-op stub (see :meth:`get_model_visuals`)."""
 
     def update_color(self, visuals, color: str) -> None:
-        """Apply *color* to all visuals (ambient + diffuse channels).
-
-        Parameters
-        ----------
-        visuals:
-            GetVisuals response returned by :meth:`get_model_visuals`.
-        color:
-            Colour name string, e.g. ``"Black"``, ``"Red"``.
-        """
-        rgba = _colour_rgba(color)
-        n = len(visuals.link_names)
-        req = SetVisualColorsRequest(
-            link_names=list(visuals.link_names),
-            visual_names=list(visuals.visual_names),
-            ambients=[rgba] * n,
-            diffuses=[rgba] * n,
-            speculars=[ColorRGBA(r=0.1, g=0.1, b=0.1, a=1.0)] * n,
-            emissives=[ColorRGBA(r=0.0, g=0.0, b=0.0, a=1.0)] * n,
-            block=True,
-        )
-        resp = self._set_visual_colors(req)
-        if not resp.success:
-            logger.warning("update_color failed: %s", resp.status_message)
+        """No-op stub (see :meth:`get_model_visuals`)."""

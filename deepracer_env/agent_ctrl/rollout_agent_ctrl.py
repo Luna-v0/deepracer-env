@@ -20,13 +20,14 @@ import os
 from collections import OrderedDict
 import math
 import numpy as np
-import rospy
 import logging
 import json
 from threading import RLock
-from gazebo_msgs.msg import ModelState
-from std_msgs.msg import Float64, String
+from std_msgs.msg import Float64MultiArray
 from shapely.geometry import Point
+
+from deepracer_env.sim_control.compat import ModelState
+from deepracer_env.runtime import get_node
 
 from deepracer_env import utils
 import deepracer_env.agent_ctrl.constants as const
@@ -51,8 +52,7 @@ from deepracer_env.gazebo_tracker.trackers.get_model_state_tracker import GetMod
 from deepracer_env.gazebo_tracker.trackers.set_model_state_tracker import SetModelStateTracker
 from deepracer_env.gazebo_tracker.abs_tracker import AbstractTracker
 from deepracer_env.gazebo_tracker.constants import TrackerPriority
-from deepracer_env.boto.s3.constants import ModelMetadataKeys
-from deepracer_env.domain_randomizations.visual_randomizer import VisualRandomizer
+from deepracer_env.agent_ctrl.model_metadata import ModelMetadataKeys
 
 
 LOG = Logger(__name__, logging.INFO).get_logger()
@@ -70,10 +70,12 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         self._ctrl_status = dict()
         self._ctrl_status[AgentCtrlStatus.AGENT_PHASE.value] = AgentPhase.PREPARE.value
         self._pause_duration = 0.0
-        self._reset_behind_dist = float(rospy.get_param("RESET_BEHIND_DIST", const.DEFAULT_RESET_BEHIND_DIST))
-        self._enable_mercy_reset = utils.str2bool(rospy.get_param("ENABLE_MERCY_RESET", False)) # feature flag
-        self._reset_ahead_dist = float(rospy.get_param("RESET_AHEAD_DIST", const.DEFAULT_RESET_AHEAD_DIST))
-        self._max_reset_count_after_crash = int(rospy.get_param("MAX_RESETS_AFTER_CRASH", const.DEFAULT_MAX_RESETS_AFTER_CRASH))
+        # ROS 2 has no global param server; these tuning flags come from the
+        # environment (set by the launch / dr-gym) with the same defaults.
+        self._reset_behind_dist = float(os.environ.get("RESET_BEHIND_DIST", const.DEFAULT_RESET_BEHIND_DIST))
+        self._enable_mercy_reset = utils.str2bool(os.environ.get("ENABLE_MERCY_RESET", "false"))  # feature flag
+        self._reset_ahead_dist = float(os.environ.get("RESET_AHEAD_DIST", const.DEFAULT_RESET_AHEAD_DIST))
+        self._max_reset_count_after_crash = int(os.environ.get("MAX_RESETS_AFTER_CRASH", const.DEFAULT_MAX_RESETS_AFTER_CRASH))
         # thread lock
         self._lock = RLock()
         # reset rules manager
@@ -114,13 +116,17 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         self._agent_link_name_list_ = config_dict[const.ConfigParams.LINK_NAME_LIST.value]
         # Store the reward function
         self._reward_ = config_dict[const.ConfigParams.REWARD.value]
-        # Create publishers for controlling the car
-        self._velocity_pub_dict_ = OrderedDict()
-        self._steering_pub_dict_ = OrderedDict()
-        for topic in config_dict[const.ConfigParams.VELOCITY_LIST.value]:
-            self._velocity_pub_dict_[topic] = rospy.Publisher(topic, Float64, queue_size=1)
-        for topic in config_dict[const.ConfigParams.STEERING_LIST.value]:
-            self._steering_pub_dict_[topic] = rospy.Publisher(topic, Float64, queue_size=1)
+        # Create publishers for controlling the car. ros2_control exposes two
+        # group command topics (wheels velocity, steering position) rather than
+        # six per-joint Float64 topics; both carry std_msgs/Float64MultiArray.
+        # The namespace matches the car (root for the single-car 'racecar',
+        # /<racecar_i>/ for multi-car) so each car commands its own controllers.
+        _ns = '' if self._agent_name_ == 'racecar' else '/{}'.format(self._agent_name_)
+        _node = get_node()
+        self._velocity_pub_ = _node.create_publisher(
+            Float64MultiArray, '{}/wheels_velocity_controller/commands'.format(_ns), 1)
+        self._steering_pub_ = _node.create_publisher(
+            Float64MultiArray, '{}/steering_position_controller/commands'.format(_ns), 1)
         #Create default reward parameters
         self._reward_params_ = const.RewardParam.make_default_param()
         #Create the default metrics dictionary
@@ -158,6 +164,9 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
             visual_seed = int(visual_seed_env) if visual_seed_env not in (None, "") else None
             self._visual_dr_rng_ = np.random.default_rng(visual_seed)
             try:
+                # Lazy import: only the gated visual-DR path needs it, so the
+                # default path never pulls in the visual-discovery machinery.
+                from deepracer_env.domain_randomizations.visual_randomizer import VisualRandomizer
                 self._visual_randomizer_ = VisualRandomizer()
             except Exception as ex:  # noqa: BLE001 - never break reset on DR setup
                 LOG.warning("Visual DR setup failed, disabling visual DR: %s", ex)
@@ -198,7 +207,7 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         # True if the agent is in the training phase
         self._is_training_ = is_training
         # Make sure velocity and angle are set to 0
-        send_action(self._velocity_pub_dict_, self._steering_pub_dict_, 0.0, 0.0)
+        send_action(self._velocity_pub_, self._steering_pub_, 0.0, 0.0)
 
         # start_dist should be hypothetical start line (start_ndist) plus
         # start position offset (start_line_ndist_offset).
@@ -276,7 +285,11 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         """
         if self._pause_duration > 0.0:
             self._pause_duration -= delta_time
-        self._current_sim_time = sim_time.clock.secs + 1.e-9 * sim_time.clock.nsecs
+        # ROS 2 builtin_interfaces/Time uses .sec/.nanosec (ROS 1 used .secs/.nsecs).
+        clk = sim_time.clock
+        secs = getattr(clk, "sec", getattr(clk, "secs", 0))
+        nanos = getattr(clk, "nanosec", getattr(clk, "nsecs", 0))
+        self._current_sim_time = secs + 1.e-9 * nanos
 
     @property
     def action_space(self):
@@ -311,7 +324,7 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
             except Exception as ex:  # noqa: BLE001
                 LOG.warning("Visual DR randomize failed (continuing reset): %s", ex)
         self._metrics.reset()
-        send_action(self._velocity_pub_dict_, self._steering_pub_dict_, 0.0, 0.0)
+        send_action(self._velocity_pub_, self._steering_pub_, 0.0, 0.0)
         start_model_state = self._get_car_start_model_state()
         # set_model_state and get_model_state is actually occurred asynchronously
         # in tracker with simulation clock subscription. So, when the agent is
@@ -606,10 +619,10 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
             steering_angle = steering_angle * math.pi / 180.0
             speed = max(min(const.MAX_SPEED, float(action[1])), const.MIN_SPEED)
             action_speed = speed / self._wheel_radius_
-            send_action(self._velocity_pub_dict_, self._steering_pub_dict_,
+            send_action(self._velocity_pub_, self._steering_pub_,
                         steering_angle, action_speed)
         elif self._ctrl_status[AgentCtrlStatus.AGENT_PHASE.value] in ZERO_SPEED_AGENT_PHASES:
-            send_action(self._velocity_pub_dict_, self._steering_pub_dict_, 0.0, 0.0)
+            send_action(self._velocity_pub_, self._steering_pub_, 0.0, 0.0)
         else:
             raise GenericRolloutException('Agent phase {} is not defined'.\
                   format(self._ctrl_status[AgentCtrlStatus.AGENT_PHASE.value]))

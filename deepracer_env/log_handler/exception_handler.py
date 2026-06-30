@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import sys
-import io
 import signal
 import time
 import datetime
@@ -192,66 +191,31 @@ def simapp_exit_gracefully(simapp_exit=SIMAPP_ERROR_EXIT, json_log=None,
                            stopRosNodeMonitor=True):
     # simapp exception leading to exiting the system
     # - close the running processes
-    # - upload simtrace data to S3
+    # - log the crash status locally (S3 upload removed)
     LOG.info("simapp_exit_gracefully: simapp_exit-{}".format(simapp_exit))
     LOG.info("Terminating simapp simulation...")
     callstack_trace = ''.join(traceback.format_stack())
     LOG.info("simapp_exit_gracefully - callstack trace=Traceback (callstack)\n{}".format(callstack_trace))
     exception_trace = traceback.format_exc()
     LOG.info("simapp_exit_gracefully - exception trace={}".format(exception_trace))
-    upload_to_s3(json_log=json_log,
-                 s3_crash_status_file_name=s3_crash_status_file_name)
+    # Note: S3 upload of the crash status has been removed; just log it locally.
+    if json_log is not None:
+        LOG.info("simapp_exit_gracefully - crash status: {}".format(json_log))
 
     if simapp_exit == SIMAPP_ERROR_EXIT:
         LOG.info("Calling cancel_simulation_job because of failure.")
         if(hasSimAppExceptionOccured):
-            #directly importing rospy doesn't work
-            from rospy import get_name, signal_shutdown
-            err_msg = "Killing rosnode and cancelling job because of failure: {}".format(get_name())
+            # Note: under ROS 2 the rospy master shutdown (signal_shutdown) is no
+            # longer used; log the failure locally instead. Node lifecycle is
+            # managed by deepracer_env.runtime.
+            err_msg = "Killing rosnode and cancelling job because of failure."
             LOG.error(err_msg)
-            signal_shutdown(err_msg)
             # wait for monitoring to detect the dead node
             time.sleep(5)
         # for non exception and live races, just normally stop
         if(stopRosNodeMonitor):
             from deepracer_env.utils import stop_ros_node_monitor
             stop_ros_node_monitor()
-
-# the global variable for upload_to_s3
-is_upload_to_s3_called = False
-
-
-def upload_to_s3(json_log, s3_crash_status_file_name):
-    if s3_crash_status_file_name is None or json_log is None:
-        LOG.info("simapp_exit_gracefully - skipping s3 upload.")
-        return
-    # this global variable is added to avoid us running into infinte loop
-    # because s3 client could call log and exit as well.
-    global is_upload_to_s3_called
-    if not is_upload_to_s3_called:
-        is_upload_to_s3_called = True
-        try:
-            # I know this dynamic import can be considered as bad code design
-            # however, it's needed to playaround the circular import issue
-            # without large scale code change in all places that import log_and_exit
-            # TODO: refactor this when we migrate entirely to python 3
-            from deepracer_env import utils
-            from deepracer_env.boto.s3.s3_client import S3Client
-            s3_endpoint_url = os.environ.get("S3_ENDPOINT_URL", None)
-            LOG.info("simapp_exit_gracefully - first time upload_to_s3 called.")
-            s3_client = S3Client(s3_endpoint_url=s3_endpoint_url)
-            s3_key = os.path.normpath(os.path.join(os.environ.get("YAML_S3_PREFIX", ''),
-                                                   s3_crash_status_file_name))
-            s3_client.upload_fileobj(bucket=os.environ.get("YAML_S3_BUCKET", ''),
-                                     s3_key=s3_key,
-                                     fileobj=io.BytesIO(json_log.encode()),
-                                     s3_kms_extra_args=utils.get_s3_extra_args())
-            LOG.info("simapp_exit_gracefully - Successfully uploaded simapp status to \
-                      s3 bucket {} with s3 key {}.".format(os.environ.get("YAML_S3_BUCKET", ''),
-                                                           s3_key))
-        except Exception as ex:
-            LOG.error("simapp_exit_gracefully - upload to s3 failed=%s", ex)
-
 
 def get_fault_code_for_error(msg):
     '''Helper method that classifies an error message generated in log_and_exit 

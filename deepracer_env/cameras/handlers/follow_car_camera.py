@@ -17,7 +17,12 @@
 import math
 import numpy as np
 
-from gazebo_msgs.msg import ModelState, ModelStates
+# ROS 2 port: ``gazebo_msgs`` has no equivalent on ROS 2. The ModelState
+# envelope is the drop-in compat shim (model_name + geometry_msgs Pose/Twist);
+# SetModelStateTracker has been re-homed onto the SimControl seam, so the teleport
+# behaviour below is unchanged. ``geometry_msgs/Pose`` still exists on ROS 2.
+# (``ModelStates`` was imported but unused, so it is dropped.)
+from deepracer_env.sim_control.compat import ModelState
 from geometry_msgs.msg import Pose
 from deepracer_env.cameras import utils
 from deepracer_env.track_geom.utils import euler_to_quaternion, quaternion_to_euler, apply_orientation

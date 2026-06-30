@@ -15,7 +15,7 @@
 #################################################################################
 
 '''This module implements concrete reset rule for going reversed direction'''
-import rospy
+import os
 
 from deepracer_env.reset.abstract_reset_rule import AbstractResetRule
 from deepracer_env.reset.constants import AgentCtrlStatus, AgentPhase
@@ -27,7 +27,8 @@ class ReverseResetRule(AbstractResetRule):
 
     def __init__(self):
         super(ReverseResetRule, self).__init__(ReverseResetRule.name)
-        self._number_of_reverse_counts = int(rospy.get_param("NUMBER_OF_REVERSE_COUNTS", 15))
+        # ROS 2 has no global param server; read the threshold from the environment instead.
+        self._number_of_reverse_counts = int(os.environ.get("NUMBER_OF_REVERSE_COUNTS", 15))
         self._reverse_count = 0
 
     def _update(self, agent_status):

@@ -1,9 +1,11 @@
 '''Static-obstacle spawn / respawn / teardown for D1 Object Avoidance.
 
-Uses the standard Gazebo services ``/gazebo/spawn_sdf_model`` and
-``/gazebo/delete_model`` (no custom plugin required) and registers each
-spawned obstacle with ``TrackData`` so the existing collision detection
-and ``get_object_reward_params`` light up automatically.
+Spawns / deletes obstacles through the simulator seam
+(:func:`deepracer_env.runtime.get_sim_control` ->
+``spawn_entity`` / ``delete_entity``, which under the hood drive the
+backend's model-spawn/-delete services) and registers each spawned
+obstacle with ``TrackData`` so the existing collision detection and
+``get_object_reward_params`` light up automatically.
 '''
 import logging
 import os
@@ -11,9 +13,6 @@ import threading
 from typing import List, Tuple
 
 import numpy as np
-import rospy
-from gazebo_msgs.srv import SpawnModel, DeleteModel
-from geometry_msgs.msg import Pose
 
 from deepracer_env.log_handler.logger import Logger
 from deepracer_env.object_avoidance.config import (
@@ -21,10 +20,9 @@ from deepracer_env.object_avoidance.config import (
     PLACEMENT_CALLABLE, PLACEMENT_FIXED, PLACEMENT_RANDOM,
 )
 from deepracer_env.object_avoidance import placement as placement_strategies  # noqa: E402
-from deepracer_env.track_geom.constants import (
-    ObstacleDimensions, SPAWN_SDF_MODEL, DELETE_MODEL,
-)
-from deepracer_env.track_geom.utils import euler_to_quaternion
+from deepracer_env.runtime import get_sim_control
+from deepracer_env.sim_control.types import Pose
+from deepracer_env.track_geom.constants import ObstacleDimensions
 
 
 LOG = Logger(__name__, logging.INFO).get_logger()
@@ -50,8 +48,6 @@ class ObstacleManager(object):
         self._sdf_text = self._read_sdf(cfg.obstacle_sdf_path or _default_sdf_path())
         self._spawned: List[str] = []
         self._lock = threading.Lock()
-        self._spawn_srv = None
-        self._delete_srv = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -150,40 +146,25 @@ class ObstacleManager(object):
 
     @staticmethod
     def _make_pose(x: float, y: float, yaw: float) -> Pose:
-        pose = Pose()
-        pose.position.x = float(x)
-        pose.position.y = float(y)
-        pose.position.z = ObstacleManager._BOX_HALF_HEIGHT
-        q = euler_to_quaternion(yaw=float(yaw))
-        pose.orientation.x = q[0]
-        pose.orientation.y = q[1]
-        pose.orientation.z = q[2]
-        pose.orientation.w = q[3]
-        return pose
+        # Seam Pose (frozen dataclass). ``Pose.at`` builds the yaw-only
+        # quaternion that ``euler_to_quaternion(yaw=...)`` used to produce, and
+        # exposes the same ``position.x/y/z`` + ``orientation.x/y/z/w`` fields
+        # TrackData reads downstream.
+        return Pose.at(
+            float(x), float(y),
+            ObstacleManager._BOX_HALF_HEIGHT, float(yaw),
+        )
 
     @staticmethod
     def _read_sdf(path: str) -> str:
         with open(path, 'r') as fh:
             return fh.read()
 
-    def _ensure_services(self):
-        if self._spawn_srv is None:
-            rospy.wait_for_service(SPAWN_SDF_MODEL, timeout=30.0)
-            self._spawn_srv = rospy.ServiceProxy(SPAWN_SDF_MODEL, SpawnModel)
-        if self._delete_srv is None:
-            rospy.wait_for_service(DELETE_MODEL, timeout=30.0)
-            self._delete_srv = rospy.ServiceProxy(DELETE_MODEL, DeleteModel)
-
     def _call_spawn(self, name: str, pose: Pose):
-        self._ensure_services()
-        return self._spawn_srv(
-            model_name=name,
-            model_xml=self._sdf_text,
-            robot_namespace='',
-            initial_pose=pose,
-            reference_frame='',
-        )
+        # Seam replacement for the ``/gazebo/spawn_sdf_model`` ServiceProxy:
+        # the shared SimControl spawns the bundled SDF string at ``pose``.
+        return get_sim_control().spawn_entity(name, self._sdf_text, pose=pose)
 
     def _call_delete(self, name: str):
-        self._ensure_services()
-        return self._delete_srv(model_name=name)
+        # Seam replacement for the ``/gazebo/delete_model`` ServiceProxy.
+        return get_sim_control().delete_entity(name)

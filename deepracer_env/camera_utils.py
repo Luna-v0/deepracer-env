@@ -32,8 +32,10 @@ configure_camera(namespaces)
 """
 
 import time
-import rospy
 
+# NOTE: ROS 2 port — the legacy ``import rospy`` was unused here (model presence
+# is polled through the ported GetModelStateTracker, which now reads the shared
+# SimControl backend), so it is simply dropped.
 from deepracer_env.gazebo_tracker.trackers.get_model_state_tracker import GetModelStateTracker
 from deepracer_env.cameras.camera_factory import CameraFactory, CameraType
 
