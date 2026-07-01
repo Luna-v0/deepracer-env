@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import logging
 import math
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
@@ -104,6 +106,17 @@ class DomainRandomizer:
         self._rng = rng
         self._track_entity = track_entity_name
         self._light_name = light_name
+        # The scene-side DR (recolor + lighting) goes through gz-transport SERVICES
+        # (visual_config / light_config) which have no ROS bridge, so they run as
+        # `gz` CLI subprocesses. Calling them EVERY episode churns gz-transport
+        # connections/ephemeral ports until the server returns "Host unreachable"
+        # and the run wedges/segfaults over a long rollout. Throttle them to at
+        # most once per _GZ_DR_MIN_INTERVAL_S (wall) — the mesh recolor is visually
+        # a no-op on the baked track anyway, and lighting only needs to vary
+        # slowly; per-EPISODE visual variation comes from the PHOTOMETRIC DR
+        # (brightness/contrast/gamma on the frames, Python-side, unthrottled).
+        self._gz_dr_min_interval_s = float(os.getenv("GYM_DR_GZ_DR_INTERVAL_S", "5.0"))
+        self._last_gz_dr_t = 0.0
 
     # -- sampling --------------------------------------------------------------
 
@@ -169,17 +182,30 @@ class DomainRandomizer:
 
         Best-effort: a backend without a capability, or a target the scene does
         not expose, is logged and skipped — DR must never break a reset.
+
+        The scene-side ops (recolor + lighting) are gz-CLI and are THROTTLED to
+        ``_gz_dr_min_interval_s`` to avoid exhausting gz-transport over a long
+        rollout (see __init__). Per-episode visual variation is carried by the
+        photometric DR applied to the frames elsewhere.
         """
+        now = time.monotonic()
+        if (now - self._last_gz_dr_t) < self._gz_dr_min_interval_s:
+            return  # too soon since the last gz-CLI DR — skip to spare gz-transport
+        did_gz = False
         if episode.track_color is not None and sim.supports(Capability.VISUAL_RECOLOR):
             self._recolor(sim, _TRACK_LINK, episode.track_color)
             if episode.background_color is not None:
                 self._recolor(sim, _BG_LINK, episode.background_color)
+            did_gz = True
         if episode.light_diffuse is not None and sim.supports(Capability.LIGHTING):
             try:
                 sim.set_light(self._light_name, diffuse=episode.light_diffuse,
                               direction=episode.light_direction)
+                did_gz = True
             except (CapabilityNotSupported, Exception) as ex:  # noqa: BLE001
                 LOG.debug("lighting DR skipped: %s", ex)
+        if did_gz:
+            self._last_gz_dr_t = now
 
     def _recolor(self, sim, link: str, color: ColorRGBA) -> None:
         ambient = ColorRGBA(color.r * 0.6, color.g * 0.6, color.b * 0.6, color.a)
