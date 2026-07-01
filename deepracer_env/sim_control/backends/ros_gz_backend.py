@@ -110,6 +110,9 @@ class RosGzBackend(SimControl):
         # dominant short-episode/reset cost). Falls back to the gz CLI.
         self._set_pose_client = None
         self._set_pose_tried = False
+        self._set_pose_node = None
+        self._set_pose_exec = None
+        self._set_pose_thread = None
 
     # -- capabilities ----------------------------------------------------------
 
@@ -343,8 +346,9 @@ class RosGzBackend(SimControl):
             # promptly (no flooding sub to starve it, unlike the shared SimNode).
             # Avoids spin_until_future_complete, which re-enters and raises
             # "Executor is already spinning" when resets interleave with steps.
-            threading.Thread(target=self._set_pose_exec.spin,
-                             name="dr-set-pose-exec", daemon=True).start()
+            self._set_pose_thread = threading.Thread(
+                target=self._set_pose_exec.spin, name="dr-set-pose-exec", daemon=True)
+            self._set_pose_thread.start()
             cli = self._set_pose_node.create_client(
                 SetEntityPose, "{}/set_pose".format(self._prefix))
             if cli.wait_for_service(timeout_sec=5.0):
@@ -392,6 +396,38 @@ class RosGzBackend(SimControl):
         if not self._ok(out) and not self._gz_alive():
             raise SimControlDead("gz died teleporting {!r}".format(name))
         return self._ok(out)
+
+    # -- lifecycle -------------------------------------------------------------
+
+    def close(self) -> None:
+        """Tear down the dedicated set_pose executor/node so a later
+        ``rclpy.shutdown()`` (runtime.reset_runtime between HPO trials) doesn't
+        leave the spinning daemon thread using a destroyed context — that raised
+        ``InvalidHandle('cannot use Destroyable ...')`` and failed every trial
+        after the first. The pose subscription lives on the shared SimNode, which
+        the runtime destroys separately."""
+        exec_ = self._set_pose_exec
+        if exec_ is not None:
+            try:
+                exec_.shutdown()  # unblocks spin() -> the daemon thread returns
+            except Exception:  # noqa: BLE001
+                pass
+        thread = self._set_pose_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        node = self._set_pose_node
+        if node is not None:
+            try:
+                node.destroy_node()
+            except Exception:  # noqa: BLE001
+                pass
+        self._set_pose_client = None
+        self._set_pose_node = None
+        self._set_pose_exec = None
+        self._set_pose_thread = None
+        self._set_pose_tried = False  # allow re-creation if the seam is reused
+        self._pose_sub = None
+        self._pose_sub_tried = False
 
     # -- time control ----------------------------------------------------------
 
