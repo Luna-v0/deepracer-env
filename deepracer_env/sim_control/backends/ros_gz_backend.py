@@ -400,12 +400,25 @@ class RosGzBackend(SimControl):
     # -- lifecycle -------------------------------------------------------------
 
     def close(self) -> None:
-        """Tear down the dedicated set_pose executor/node so a later
-        ``rclpy.shutdown()`` (runtime.reset_runtime between HPO trials) doesn't
-        leave the spinning daemon thread using a destroyed context — that raised
-        ``InvalidHandle('cannot use Destroyable ...')`` and failed every trial
-        after the first. The pose subscription lives on the shared SimNode, which
-        the runtime destroys separately."""
+        """Tear down the seam's rclpy resources so a later ``rclpy.shutdown()``
+        (runtime.reset_runtime) doesn't crash on live handles:
+
+        * The dedicated set_pose executor/node: an unstopped spinning daemon
+          thread raised ``InvalidHandle('cannot use Destroyable ...')`` and failed
+          every HPO trial after the first.
+        * The bridged dynamic_pose subscription: at unlimited RTF it floods the
+          shared SimNode's executor, so the executor's spin() doesn't return on
+          shutdown and its thread is still live when rclpy tears the context down
+          -> a SEGFAULT (rc=139) on teardown of a multi-car CAMERA run (which has
+          8 pose streams). Destroy it here, BEFORE the SimNode is destroyed, so
+          the executor drains and stops cleanly.
+        """
+        if self._pose_sub is not None:
+            try:
+                from deepracer_env.runtime import get_node
+                get_node().destroy_subscription(self._pose_sub)
+            except Exception:  # noqa: BLE001
+                pass
         exec_ = self._set_pose_exec
         if exec_ is not None:
             try:
