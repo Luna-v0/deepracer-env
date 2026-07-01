@@ -91,12 +91,12 @@
   <joint name="left_rear_wheel_joint" type="continuous">
     <parent link="chassis"/><child link="left_rear_wheel"/>
     <origin xyz="-0.081663 0.08105 0.01575" rpy="0 0 0"/><axis xyz="0 1 0"/>
-    <limit effort="10" velocity="100"/>
+    <limit effort="10" velocity="140"/>
   </joint>
   <joint name="right_rear_wheel_joint" type="continuous">
     <parent link="chassis"/><child link="right_rear_wheel"/>
     <origin xyz="-0.081663 -0.08105 0.01575" rpy="0 0 0"/><axis xyz="0 1 0"/>
-    <limit effort="10" velocity="100"/>
+    <limit effort="10" velocity="140"/>
   </joint>
 
   <!-- steering hinges: steered (position), about Z, ±1 rad -->
@@ -125,12 +125,12 @@
   <joint name="left_front_wheel_joint" type="continuous">
     <parent link="left_steering_hinge"/><child link="left_front_wheel"/>
     <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 1 0"/>
-    <limit effort="10" velocity="100"/>
+    <limit effort="10" velocity="140"/>
   </joint>
   <joint name="right_front_wheel_joint" type="continuous">
     <parent link="right_steering_hinge"/><child link="right_front_wheel"/>
     <origin xyz="0 0 0" rpy="0 0 0"/><axis xyz="0 1 0"/>
-    <limit effort="10" velocity="100"/>
+    <limit effort="10" velocity="140"/>
   </joint>
 
   <!-- camera + lidar mount links -->
