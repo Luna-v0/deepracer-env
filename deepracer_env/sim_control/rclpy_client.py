@@ -30,7 +30,7 @@ import time
 from typing import Optional
 
 import rclpy
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
 from deepracer_env.sim_control.interface import SimControlError, SimControlTimeout
@@ -73,10 +73,12 @@ class SimNode(Node):
         """
         ensure_rclpy_initialized()
         super().__init__(name, namespace=namespace or None)
-        # Multi-threaded so a high-rate subscription (the bridged dynamic_pose
-        # stream, which floods at unlimited RTF) cannot starve a concurrent
-        # service-client response (set_pose) on the same node.
-        self._executor = MultiThreadedExecutor()
+        # Single-threaded: set_pose runs on its OWN dedicated node/executor, so
+        # this node only fans out subscription callbacks + publishes — no need for
+        # concurrency, and one thread tears down predictably (a MultiThreaded pool
+        # left worker threads alive under the dynamic_pose flood, so the context
+        # shutdown segfaulted at teardown of a multi-car camera run).
+        self._executor = SingleThreadedExecutor()
         self._executor.add_node(self)
         self._spin_thread: Optional[threading.Thread] = None
         self._spinning = False
@@ -93,13 +95,24 @@ class SimNode(Node):
         self._spin_thread.start()
 
     def stop_spinning(self) -> None:
-        """Stop the executor thread (idempotent)."""
+        """Stop the executor thread (idempotent).
+
+        shutdown() wakes the spin via its guard condition so spin() returns and
+        the daemon thread exits; join with a generous timeout because draining a
+        flooded executor (dynamic_pose + N camera subs at unlimited RTF) can take
+        a moment. The thread MUST be dead before rclpy tears the context down or
+        the finalise segfaults (rc=139)."""
         if not self._spinning:
             return
         self._spinning = False
-        self._executor.shutdown()
+        try:
+            self._executor.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
         if self._spin_thread is not None:
-            self._spin_thread.join(timeout=2.0)
+            self._spin_thread.join(timeout=8.0)
+            if self._spin_thread.is_alive():
+                LOG.warning("SimNode executor thread did not stop within 8s")
             self._spin_thread = None
 
     def destroy(self) -> None:
