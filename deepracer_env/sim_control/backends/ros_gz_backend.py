@@ -397,6 +397,34 @@ class RosGzBackend(SimControl):
             raise SimControlDead("gz died teleporting {!r}".format(name))
         return self._ok(out)
 
+    def set_entity_states(self, states, *, blocking=True):  # noqa: D102
+        # Batch teleport: ONE gz `set_pose_vector` (gz.msgs.Pose_V) applies EVERY
+        # pose on a single gz update tick, replacing N sequential per-entity
+        # round-trips that each wait on their own tick — the multi-car reset-storm
+        # lever (modernization report §1.1). One gz-CLI call for all cars instead of
+        # N. Twist re-settles via physics + the zeroed wheel commands, as set_entity_state.
+        pairs = list(states)
+        if not pairs:
+            return True
+        entries = "\n".join(
+            'pose {{name: "{}" {}}}'.format(name, _fmt_pose(st.pose))
+            for name, st in pairs
+        )
+        out = self._service(
+            "set_pose_vector", "gz.msgs.Pose_V", "gz.msgs.Boolean", entries)
+        if self._ok(out):
+            return True
+        if not self._gz_alive():
+            raise SimControlDead(
+                "gz died batch-teleporting {} entities".format(len(pairs)))
+        # set_pose_vector unavailable/rejected on this gz build — degrade to the
+        # sequential per-entity teleport (correct, just not batched) so a reset never
+        # silently leaves cars unmoved.
+        LOG.warning(
+            "set_pose_vector failed/unavailable; falling back to %d per-car teleports",
+            len(pairs))
+        return super().set_entity_states(pairs, blocking=blocking)
+
     # -- lifecycle -------------------------------------------------------------
 
     def close(self) -> None:

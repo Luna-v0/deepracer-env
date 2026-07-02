@@ -85,6 +85,23 @@ class Agent(object):
         self._ctrl_.reset_agent()
         return sensor_state
 
+    def prepare_reset(self):
+        '''Batched multi-car reset, phase 1: clear the sensor buffers and compute
+        this car's start state WITHOUT teleporting. Returns the target ModelState
+        for the caller to apply — the multi-car env collects every car's state and
+        teleports them together in ONE ``set_pose_vector`` gz tick (the reset-storm
+        lever), instead of N sequential blocking teleports.'''
+        if self._sensor_ is not None:
+            self._sensor_.reset()
+        return self._ctrl_.prepare_reset()
+
+    def finish_reset(self):
+        '''Batched multi-car reset, phase 2: read the applied start pose back and
+        return the initial sensor observation. Call once the (batched) teleport has
+        been applied — the obs then reflects the new start position.'''
+        self._ctrl_.finish_reset()
+        return self._sensor_.get_state() if self._sensor_ is not None else None
+
     def finish_episode(self):
         '''Run end-of-episode housekeeping in the controller.'''
         self._ctrl_.finish_episode()

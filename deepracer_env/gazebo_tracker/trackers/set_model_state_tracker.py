@@ -63,6 +63,36 @@ class SetModelStateTracker(AbstractTracker):
             self._pending[model_state.model_name] = to_entity_state(model_state)
             return StateResponse(success=True)
 
+    def set_model_states(self, model_states, blocking=True):
+        """Teleport MANY models in ONE batched backend call (the multi-car reset).
+
+        The batched analogue of :meth:`set_model_state`: converts each
+        ``compat.ModelState`` to ``(name, EntityState)`` and issues a single
+        ``SimControl.set_entity_states`` — which the ``ros_gz`` backend collapses to
+        one ``set_pose_vector`` gz tick instead of N sequential blocking teleports
+        (the camera reset-storm lever). Drops any queued writes for these models
+        first so they don't double-apply.
+
+        Args:
+            model_states: sequence of ``compat.ModelState`` (target pose/twist + name).
+            blocking: apply immediately (the reset path relies on this).
+
+        Returns:
+            StateResponse: ``.success`` is True iff every teleport applied.
+        """
+        model_states = list(model_states)
+        with self.lock:
+            for ms in model_states:
+                self._pending.pop(ms.model_name, None)
+            pairs = [(ms.model_name, to_entity_state(ms)) for ms in model_states]
+        if not pairs:
+            return StateResponse(success=True)
+        try:
+            ok = self._sim.set_entity_states(pairs, blocking=blocking)
+            return StateResponse(success=bool(ok))
+        except SimControlError as ex:
+            return StateResponse(success=False, status_message=str(ex))
+
     def update_tracker(self, delta_time, sim_time):
         """Flush all queued teleports to the simulator."""
         with self.lock:

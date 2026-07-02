@@ -325,8 +325,26 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
 
     def reset_agent(self):
         '''reset agent by reseting member variables, reset s3 metrics, and reset agent to
-           starting position at the beginning of each episode
+           starting position at the beginning of each episode (single-car path).
         '''
+        start_model_state = self.prepare_reset()
+        # set_model_state and get_model_state occur asynchronously in the tracker with
+        # the sim-clock subscription; use blocking so the pose is actually applied in
+        # gazebo and reflected in GetModelStateTracker right away for the first step.
+        SetModelStateTracker.get_instance().set_model_state(start_model_state, blocking=True)
+        self.finish_reset()
+
+    def prepare_reset(self):
+        '''Compute this episode's start state and do all reset bookkeeping WITHOUT
+        teleporting; return the target ``ModelState`` for the caller to apply.
+
+        This is the split that enables the batched multi-car reset: the single-car
+        path teleports the returned state immediately (:meth:`reset_agent`), while the
+        multi-car env collects every car's state and applies them in ONE batched
+        ``SetModelStateTracker.set_model_states`` call (the camera reset-storm lever —
+        N sequential blocking teleports collapse to one ``set_pose_vector`` gz tick).
+        All bookkeeping below uses the *computed* start pose (the teleport target), so
+        it is correct before the teleport is applied.'''
         LOG.info(f"Reset agent (count: {self._reset_count})")
         self._clear_data()
         # Consolidated per-arena domain randomization: sample this episode's knobs
@@ -350,14 +368,6 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         self._metrics.reset()
         send_action(self._velocity_pub_, self._steering_pub_, 0.0, 0.0)
         start_model_state = self._get_car_start_model_state()
-        # set_model_state and get_model_state is actually occurred asynchronously
-        # in tracker with simulation clock subscription. So, when the agent is
-        # entering next step function call, either set_model_state
-        # or get_model_state may not actually happened and the agent position may be outdated.
-        # To avoid such case, use blocking to actually update the model position in gazebo
-        # and GetModelstateTracker to reflect the latest agent position right away when start.
-        SetModelStateTracker.get_instance().set_model_state(start_model_state, blocking=True)
-        GetModelStateTracker.get_instance().get_model_state(self._agent_name_, '', blocking=True)
         # Seed prev_car_pose with the (valid) start pose so an off-track reset on
         # the FIRST step uses a real Pose, not the init 0.0 float. Single-car
         # spawns on-track so it never hit this; a multi-car off-its-track car does.
@@ -368,6 +378,13 @@ class RolloutCtrl(AgentCtrlInterface, ObserverInterface, AbstractTracker):
         self._track_data_.update_object_pose(self._agent_name_, start_model_state.pose)
         # update pause car model pose to the new start model state pose
         self._prepare_car_model_pose = start_model_state.pose
+        return start_model_state
+
+    def finish_reset(self):
+        '''Read the (now-applied) start pose back so GetModelStateTracker reflects it
+        immediately on the first step. Call once the teleport has been applied —
+        after the single-car ``set_model_state`` or the batched ``set_model_states``.'''
+        GetModelStateTracker.get_instance().get_model_state(self._agent_name_, '', blocking=True)
         LOG.info(f"Reset agent (count: {self._reset_count}) finished")
 
     def _pause_car_model(self, car_model_pose, should_reset_camera=False, blocking=False):

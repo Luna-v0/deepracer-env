@@ -224,6 +224,27 @@ class SimControl(abc.ABC):
             ``True`` on success.
         """
 
+    def set_entity_states(
+        self, states: "List[tuple]", *, blocking: bool = True
+    ) -> bool:
+        """Teleport MANY entities in one shot — the batched analogue of
+        :meth:`set_entity_state`.
+
+        This is the multi-car reset lever: resetting all N cars of a shared
+        simulator in a single backend round-trip instead of N sequential blocking
+        ones (which cluster into the camera reset-storm). ``states`` is a sequence
+        of ``(name, EntityState)`` pairs.
+
+        The default implementation loops :meth:`set_entity_state` — correct but not
+        batched. Backends that can teleport atomically (the ``ros_gz`` backend's
+        native ``set_pose_vector``) override this to apply every pose on one gz
+        update tick. Returns ``True`` iff every write applied.
+        """
+        ok = True
+        for name, state in states:
+            ok = self.set_entity_state(name, state, blocking=blocking) and ok
+        return ok
+
     def get_link_state(
         self, entity: str, link: str, *, reference_frame: str = "world"
     ) -> EntityState:

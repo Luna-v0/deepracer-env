@@ -112,9 +112,23 @@ class MultiAgentDeepRacerEnv:
 
     # ------------------------------------------------------------------ #
     def reset(self) -> List[dict]:
-        """Reset all cars; return the list of N initial observations."""
+        """Reset all cars; return the list of N initial observations.
+
+        The N per-car teleports are BATCHED into one backend round-trip: each agent
+        computes its start state and does its reset bookkeeping (``prepare_reset``,
+        teleport deferred), then all cars are teleported together via one
+        ``SetModelStateTracker.set_model_states`` — which the ``ros_gz`` backend
+        applies as a single ``set_pose_vector`` gz tick, instead of N sequential
+        blocking ``set_model_state`` round-trips that cluster into the camera
+        reset-storm. Each agent then reads its pose back (``finish_reset``)."""
+        from deepracer_env.gazebo_tracker.trackers.set_model_state_tracker import (
+            SetModelStateTracker,
+        )
+
         self._last_step_sim_time = None  # re-anchor pacing
-        return [agent.reset_agent() for agent in self._agents]
+        states = [agent.prepare_reset() for agent in self._agents]
+        SetModelStateTracker.get_instance().set_model_states(states, blocking=True)
+        return [agent.finish_reset() for agent in self._agents]
 
     def reset_one(self, i: int) -> dict:
         """Reset just car ``i`` (its episode ended); the others are untouched.
