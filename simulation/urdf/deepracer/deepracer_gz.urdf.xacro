@@ -99,7 +99,16 @@
     <limit effort="10" velocity="140"/>
   </joint>
 
-  <!-- steering hinges: steered (position), about Z, ±1 rad -->
+  <!-- steering hinges: steered (position), about Z. REVOLUTE (bounded) at ±30°
+       (0.5236 rad) — matches the agent's ±30° command (MAX_STEERING_DEG, drive.py)
+       and the real car. Was `type="continuous"`, so gz_ros_control reported "no
+       position limits" and the declared range was meaningless. Revolute makes the
+       ±30° bound real. NOTE: gz_ros_control's JointSaturationLimiter additionally
+       rate-limits sharp steering *reversals* per control tick (logs a throttled
+       "out of limits" while the joint is moving fast the other way) — that's correct
+       servo-slew behaviour, not a static cap: a *held* ±30° command settles to the
+       full ±30° (velocity→0 → limiter allows the bound). Silencing the reversal
+       warnings entirely would need gz_ros_control velocity-limit tuning; benign. -->
   <link name="left_steering_hinge">
     <visual><geometry><mesh filename="${mesh}/left_steering_hinge.STL"/></geometry></visual>
     <inertial><mass value="0.01"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
@@ -108,15 +117,15 @@
     <visual><geometry><mesh filename="${mesh}/right_steering_hinge.STL"/></geometry></visual>
     <inertial><mass value="0.01"/><inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/></inertial>
   </link>
-  <joint name="left_steering_hinge_joint" type="continuous">
+  <joint name="left_steering_hinge_joint" type="revolute">
     <parent link="chassis"/><child link="left_steering_hinge"/>
     <origin xyz="0.082311 0.079601 0.011759" rpy="0 0 0"/><axis xyz="0 0 1"/>
-    <limit lower="-1" upper="1" effort="10" velocity="100"/>
+    <limit lower="-0.5236" upper="0.5236" effort="10" velocity="100"/>
   </joint>
-  <joint name="right_steering_hinge_joint" type="continuous">
+  <joint name="right_steering_hinge_joint" type="revolute">
     <parent link="chassis"/><child link="right_steering_hinge"/>
     <origin xyz="0.082311 -0.079601 0.011759" rpy="0 0 0"/><axis xyz="0 0 1"/>
-    <limit lower="-1" upper="1" effort="10" velocity="100"/>
+    <limit lower="-0.5236" upper="0.5236" effort="10" velocity="100"/>
   </joint>
 
   <!-- front wheels: children of the steering hinges, roll about Y -->
