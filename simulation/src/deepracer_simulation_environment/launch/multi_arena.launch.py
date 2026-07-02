@@ -141,6 +141,13 @@ def _launch_setup(context, *args, **kwargs):
     cam_w = os.environ.get("GYM_DR_CAM_WIDTH", "640")
     cam_h = os.environ.get("GYM_DR_CAM_HEIGHT", "480")
     cam_rate = os.environ.get("GYM_DR_CAM_RATE", "15")
+    # Only load the camera sensor when a camera obs run needs it (GYM_DR_RENDER=1).
+    # Feature-obs runs consume no frames, so loading the sensor just wastes an OGRE2
+    # render init per car (and forces a GPU / --gpus all — the CreateRenderSystem
+    # SIGSEGV without one). Dropping it makes feature runs camera-free: no render, no
+    # GPU needed, so they run on the CPU (software-render) image and scale to many DR
+    # arenas on CPU-only / high-core boxes.
+    include_camera = "true" if os.environ.get("GYM_DR_RENDER", "0") == "1" else "false"
     gui = LaunchConfiguration("gui")  # left as a substitution for IfCondition
     # spawn_tracks:=false when a Python env (MultiAgentDeepRacerEnv) spawns the
     # per-car track instances itself — avoids double-spawning racetrack_i.
@@ -257,6 +264,7 @@ def _launch_setup(context, *args, **kwargs):
             " namespace:=", car_name,
             " friction_mu:=", friction_mu,
             " ros2_control_config:=", ros2_control_cfg,
+            " include_camera:=", include_camera,
             " camera_width:=", cam_w,
             " camera_height:=", cam_h,
             " camera_update_rate:=", cam_rate,
