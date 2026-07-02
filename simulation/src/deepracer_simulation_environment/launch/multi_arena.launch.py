@@ -135,6 +135,12 @@ def _launch_setup(context, *args, **kwargs):
     # arena i's spawners by ``i * stagger`` seconds spreads that load. Tunable via
     # GYM_DR_CTRL_STAGGER_S (0 restores the old simultaneous bringup).
     ctrl_stagger_s = float(os.environ.get("GYM_DR_CTRL_STAGGER_S", "3.0"))
+    # Camera render size + rate (per-car OGRE render cost ∝ w*h*rate — the camera
+    # car-count cap). Default to the ZED-native 640x480@15; lower via these env vars
+    # (e.g. 160x120) for cheap high-car-count camera runs. See deepracer_gz.urdf.xacro.
+    cam_w = os.environ.get("GYM_DR_CAM_WIDTH", "640")
+    cam_h = os.environ.get("GYM_DR_CAM_HEIGHT", "480")
+    cam_rate = os.environ.get("GYM_DR_CAM_RATE", "15")
     gui = LaunchConfiguration("gui")  # left as a substitution for IfCondition
     # spawn_tracks:=false when a Python env (MultiAgentDeepRacerEnv) spawns the
     # per-car track instances itself — avoids double-spawning racetrack_i.
@@ -251,6 +257,9 @@ def _launch_setup(context, *args, **kwargs):
             " namespace:=", car_name,
             " friction_mu:=", friction_mu,
             " ros2_control_config:=", ros2_control_cfg,
+            " camera_width:=", cam_w,
+            " camera_height:=", cam_h,
+            " camera_update_rate:=", cam_rate,
         ])
         actions.append(Node(
             package="robot_state_publisher", executable="robot_state_publisher",

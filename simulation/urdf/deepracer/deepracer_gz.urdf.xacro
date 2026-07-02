@@ -32,6 +32,15 @@
   <xacro:arg name="ros2_control_config"
              default="/opt/simapp/share/deepracer_simulation_environment/config/ros2_control.yaml"/>
   <xacro:arg name="include_lidar" default="true"/>
+  <!-- Camera render size + rate. The gz OGRE2 render is single-threaded, so per-car
+       render cost (∝ width*height*rate) is what caps the camera car count. The policy
+       consumes a small grayscale frame (the perception CNN targets 160x120), so the
+       640x480 native ZED size is far larger than needed; lowering these is the biggest
+       lever for "more camera cars". Kept at the ZED default here for fidelity; override
+       via the launch (GYM_DR_CAM_WIDTH/HEIGHT/RATE) for cheap high-car-count runs. -->
+  <xacro:arg name="camera_width" default="640"/>
+  <xacro:arg name="camera_height" default="480"/>
+  <xacro:arg name="camera_update_rate" default="15"/>
 
   <xacro:property name="car_name" value="$(arg car_name)"/>
   <xacro:property name="namespace" value="$(arg namespace)"/>
@@ -217,11 +226,11 @@
       <sensor name="zed_camera" type="camera">
         <topic>${car_name}/camera/zed/rgb/image_rect_color</topic>
         <gz_frame_id>camera_link</gz_frame_id>
-        <update_rate>15</update_rate>
+        <update_rate>$(arg camera_update_rate)</update_rate>
         <always_on>1</always_on>
         <camera>
           <horizontal_fov>1.13</horizontal_fov>
-          <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+          <image><width>$(arg camera_width)</width><height>$(arg camera_height)</height><format>R8G8B8</format></image>
           <clip><near>0.02</near><far>300</far></clip>
         </camera>
       </sensor>
