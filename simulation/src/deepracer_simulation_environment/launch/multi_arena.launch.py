@@ -128,6 +128,13 @@ def _launch_setup(context, *args, **kwargs):
     world = LaunchConfiguration("world").perform(context)
     spacing = float(LaunchConfiguration("spacing").perform(context))
     friction_mu = LaunchConfiguration("friction_mu").perform(context)
+    # Per-arena controller-bringup stagger. With N cars, all spawns finish at ~the
+    # same time and every arena's controller spawners then hit their (per-car)
+    # controller_manager at once, overwhelming the shared gz server so
+    # switch_controller times out and a controller dies (observed at n>=3). Delaying
+    # arena i's spawners by ``i * stagger`` seconds spreads that load. Tunable via
+    # GYM_DR_CTRL_STAGGER_S (0 restores the old simultaneous bringup).
+    ctrl_stagger_s = float(os.environ.get("GYM_DR_CTRL_STAGGER_S", "3.0"))
     gui = LaunchConfiguration("gui")  # left as a substitution for IfCondition
     # spawn_tracks:=false when a Python env (MultiAgentDeepRacerEnv) spawns the
     # per-car track instances itself — avoids double-spawning racetrack_i.
@@ -264,16 +271,27 @@ def _launch_setup(context, *args, **kwargs):
         )
         actions.append(spawn)
 
-        # 3c. Controllers — chained on this car's spawn exit so the in-URDF
-        #     gz_ros2_control controller_manager exists before they run.
+        # 3c. Controllers — brought up gently so the shared gz server's per-car
+        #     controller_managers aren't overwhelmed (switch_controller times out →
+        #     a spawner dies; seen at n>=3 under camera-render load). TWO defenses:
+        #     (i) arena i's chain STARTS delayed by ``i * ctrl_stagger_s`` (spreads the
+        #     N cars); (ii) within a car the 3 controllers are SEQUENCED — each spawner
+        #     fires only when the previous one exits — so a car never bursts its
+        #     controller_manager with 3 concurrent switch_controller calls. The chain
+        #     roots on the car's spawn exit (the in-URDF gz_ros2_control
+        #     controller_manager must exist first). GYM_DR_CTRL_STAGGER_S=0 keeps the
+        #     across-car stagger off but the within-car sequencing still applies.
+        js = spawner(car_name, "joint_state_broadcaster")
+        wheels = spawner(car_name, "wheels_velocity_controller", param_file=True)
+        steer = spawner(car_name, "steering_position_controller", param_file=True)
         actions.append(RegisterEventHandler(OnProcessExit(
             target_action=spawn,
-            on_exit=[
-                spawner(car_name, "joint_state_broadcaster"),
-                spawner(car_name, "wheels_velocity_controller", param_file=True),
-                spawner(car_name, "steering_position_controller", param_file=True),
-            ],
+            on_exit=[TimerAction(period=arena.index * ctrl_stagger_s, actions=[js])],
         )))
+        actions.append(RegisterEventHandler(OnProcessExit(
+            target_action=js, on_exit=[wheels])))
+        actions.append(RegisterEventHandler(OnProcessExit(
+            target_action=wheels, on_exit=[steer])))
 
         # 3d. Camera bridge (gz->ROS) for this car, when rendering. Without it the
         #     camera obs path gets no frames (DoubleBuffer timeout). One bridge per
